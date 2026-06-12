@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/server.dir/src/main.cpp.o CMakeFiles/server.dir/src/HttpParser.cpp.o -o server 
