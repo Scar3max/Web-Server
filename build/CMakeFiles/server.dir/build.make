@@ -97,19 +97,67 @@ CMakeFiles/server.dir/src/HttpParser.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/server.dir/src/HttpParser.cpp.s"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/HttpParser.cpp -o CMakeFiles/server.dir/src/HttpParser.cpp.s
 
+CMakeFiles/server.dir/src/Router.cpp.o: CMakeFiles/server.dir/flags.make
+CMakeFiles/server.dir/src/Router.cpp.o: /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/Router.cpp
+CMakeFiles/server.dir/src/Router.cpp.o: CMakeFiles/server.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Building CXX object CMakeFiles/server.dir/src/Router.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/server.dir/src/Router.cpp.o -MF CMakeFiles/server.dir/src/Router.cpp.o.d -o CMakeFiles/server.dir/src/Router.cpp.o -c /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/Router.cpp
+
+CMakeFiles/server.dir/src/Router.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/server.dir/src/Router.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/Router.cpp > CMakeFiles/server.dir/src/Router.cpp.i
+
+CMakeFiles/server.dir/src/Router.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/server.dir/src/Router.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/Router.cpp -o CMakeFiles/server.dir/src/Router.cpp.s
+
+CMakeFiles/server.dir/src/FileManager.cpp.o: CMakeFiles/server.dir/flags.make
+CMakeFiles/server.dir/src/FileManager.cpp.o: /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/FileManager.cpp
+CMakeFiles/server.dir/src/FileManager.cpp.o: CMakeFiles/server.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Building CXX object CMakeFiles/server.dir/src/FileManager.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/server.dir/src/FileManager.cpp.o -MF CMakeFiles/server.dir/src/FileManager.cpp.o.d -o CMakeFiles/server.dir/src/FileManager.cpp.o -c /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/FileManager.cpp
+
+CMakeFiles/server.dir/src/FileManager.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/server.dir/src/FileManager.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/FileManager.cpp > CMakeFiles/server.dir/src/FileManager.cpp.i
+
+CMakeFiles/server.dir/src/FileManager.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/server.dir/src/FileManager.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/FileManager.cpp -o CMakeFiles/server.dir/src/FileManager.cpp.s
+
+CMakeFiles/server.dir/src/Logger.cpp.o: CMakeFiles/server.dir/flags.make
+CMakeFiles/server.dir/src/Logger.cpp.o: /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/Logger.cpp
+CMakeFiles/server.dir/src/Logger.cpp.o: CMakeFiles/server.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Building CXX object CMakeFiles/server.dir/src/Logger.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/server.dir/src/Logger.cpp.o -MF CMakeFiles/server.dir/src/Logger.cpp.o.d -o CMakeFiles/server.dir/src/Logger.cpp.o -c /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/Logger.cpp
+
+CMakeFiles/server.dir/src/Logger.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/server.dir/src/Logger.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/Logger.cpp > CMakeFiles/server.dir/src/Logger.cpp.i
+
+CMakeFiles/server.dir/src/Logger.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/server.dir/src/Logger.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/Logger.cpp -o CMakeFiles/server.dir/src/Logger.cpp.s
+
 # Object files for target server
 server_OBJECTS = \
 "CMakeFiles/server.dir/src/main.cpp.o" \
-"CMakeFiles/server.dir/src/HttpParser.cpp.o"
+"CMakeFiles/server.dir/src/HttpParser.cpp.o" \
+"CMakeFiles/server.dir/src/Router.cpp.o" \
+"CMakeFiles/server.dir/src/FileManager.cpp.o" \
+"CMakeFiles/server.dir/src/Logger.cpp.o"
 
 # External object files for target server
 server_EXTERNAL_OBJECTS =
 
 server: CMakeFiles/server.dir/src/main.cpp.o
 server: CMakeFiles/server.dir/src/HttpParser.cpp.o
+server: CMakeFiles/server.dir/src/Router.cpp.o
+server: CMakeFiles/server.dir/src/FileManager.cpp.o
+server: CMakeFiles/server.dir/src/Logger.cpp.o
 server: CMakeFiles/server.dir/build.make
 server: CMakeFiles/server.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Linking CXX executable server"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Linking CXX executable server"
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/server.dir/link.txt --verbose=$(VERBOSE)
 
 # Rule to build all files generated by this target.

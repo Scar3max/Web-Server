@@ -8,7 +8,10 @@ set(CMAKE_DEPENDS_LANGUAGES
 
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
+  "/mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/FileManager.cpp" "CMakeFiles/server.dir/src/FileManager.cpp.o" "gcc" "CMakeFiles/server.dir/src/FileManager.cpp.o.d"
   "/mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/HttpParser.cpp" "CMakeFiles/server.dir/src/HttpParser.cpp.o" "gcc" "CMakeFiles/server.dir/src/HttpParser.cpp.o.d"
+  "/mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/Logger.cpp" "CMakeFiles/server.dir/src/Logger.cpp.o" "gcc" "CMakeFiles/server.dir/src/Logger.cpp.o.d"
+  "/mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/Router.cpp" "CMakeFiles/server.dir/src/Router.cpp.o" "gcc" "CMakeFiles/server.dir/src/Router.cpp.o.d"
   "/mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/main.cpp" "CMakeFiles/server.dir/src/main.cpp.o" "gcc" "CMakeFiles/server.dir/src/main.cpp.o.d"
   )
 
