@@ -37,7 +37,6 @@ int main(){
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_port = htons(8080);
     serverAddr.sin_addr.s_addr = INADDR_ANY;
-    int addrlen = sizeof(serverAddr);
     int opt = 1;
 
     if (setsockopt(serverSocket,
@@ -62,19 +61,28 @@ int main(){
     Logger::log("Server Started");
     while(true){
         int clientSocket = accept(serverSocket,(struct sockaddr *)&clientAddr, &clientLen);
-        fcntl(clientSocket,F_SETFL,O_NONBLOCK);
         if(clientSocket < 0){
-            perror("accept");
+            if(errno == EAGAIN||errno == EWOULDBLOCK){
+                continue;
+            }
             continue;
         }
-
+        fcntl(clientSocket,F_SETFL,O_NONBLOCK);
         char buffer[4096];
 
         int bytes = recv(clientSocket, buffer, sizeof(buffer)-1,0);
-        if(bytes <= 0){
+        if(bytes < 0){
+            if(errno == EAGAIN ||errno == EWOULDBLOCK){
                 close(clientSocket);
                 continue;
             }
+            close(clientSocket);
+            continue;
+        }
+        if(bytes == 0){
+            close(clientSocket);
+            continue;
+        }
 
         buffer[bytes] = '\0';
         string rawRequest(buffer);
