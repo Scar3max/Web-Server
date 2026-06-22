@@ -11,6 +11,7 @@
 #include "Logger.h"
 #include <fcntl.h>
 #include <cerrno>
+#include<sys/epoll.h>
 
 using namespace std;
 
@@ -27,7 +28,8 @@ int main(){
     router.addRoute("/about",AboutHandler);
     
     int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
-    fcntl(serverSocket,F_SETFL,O_NONBLOCK);
+    int serverFlags=fcntl(serverSocket,F_GETFL,0);
+    fcntl(serverSocket,F_SETFL,serverFlags|O_NONBLOCK);
     
     if(serverSocket<0){
         perror("Socket Failed!!");
@@ -56,65 +58,122 @@ int main(){
         perror("Listen Failed");
         exit(EXIT_FAILURE);
     }
+    int epollFd= epoll_create1(0);
+    if(epollFd < 0){
+        perror("epoll_create1");
+        exit(EXIT_FAILURE);
+    }
+    epoll_event event{};
+    event.events = EPOLLIN;
+    event.data.fd = serverSocket;
+    if(epoll_ctl(epollFd,EPOLL_CTL_ADD,serverSocket,&event) < 0){
+        perror("epoll_ctl");
+        exit(EXIT_FAILURE);
+    }
+    epoll_event events[64];
     sockaddr_in clientAddr{};
     socklen_t clientLen = sizeof(clientAddr);
     Logger::log("Server Started");
     while(true){
-        int clientSocket = accept(serverSocket,(struct sockaddr *)&clientAddr, &clientLen);
-        if(clientSocket < 0){
-            if(errno == EAGAIN||errno == EWOULDBLOCK){
-                continue;
+        int readyCount = epoll_wait(epollFd,events,64,-1);
+        if(readyCount < 0){
+            perror("epoll_wait");
+            continue;
+        }
+
+        for(int i=0;i<readyCount;i++){
+            int currentFd = events[i].data.fd;
+            if(currentFd == serverSocket){
+                while(true){
+                    int clientSocket = accept(serverSocket,(struct sockaddr *)&clientAddr, &clientLen);
+                    if(clientSocket < 0){
+                        if(errno == EAGAIN||errno == EWOULDBLOCK){
+                            break;
+                        }
+                        perror("accept");
+                        break;
+                    }
+                    int flags = fcntl(clientSocket,F_GETFL,0);
+                    if(flags==-1){
+                        close(clientSocket);
+                        continue;
+                    }
+                    fcntl(clientSocket,F_SETFL,flags|O_NONBLOCK);
+                    epoll_event clientEvent{};
+                    clientEvent.events = EPOLLIN;
+                    clientEvent.data.fd = clientSocket;
+                    if(epoll_ctl(epollFd,EPOLL_CTL_ADD,clientSocket,&clientEvent) < 0){
+                        perror("epoll_ctl");
+                        close(clientSocket);
+                        continue;
+                    }
+                }
             }
-            continue;
-        }
-        fcntl(clientSocket,F_SETFL,O_NONBLOCK);
-        char buffer[4096];
+            else{
+                char buffer[4096];
 
-        int bytes = recv(clientSocket, buffer, sizeof(buffer)-1,0);
-        if(bytes < 0){
-            if(errno == EAGAIN ||errno == EWOULDBLOCK){
-                close(clientSocket);
-                continue;
+                int bytes = recv(currentFd, buffer, sizeof(buffer)-1,0);
+                if(bytes < 0){
+                    if(errno == EAGAIN ||errno == EWOULDBLOCK){
+                        continue;
+                    }
+                    epoll_ctl(epollFd,EPOLL_CTL_DEL,currentFd,nullptr);
+                    close(currentFd);
+                    continue;
+                }
+                if(bytes == 0){
+                    epoll_ctl(epollFd,EPOLL_CTL_DEL,currentFd,nullptr);
+                    close(currentFd);
+                    continue;
+                }
+
+                buffer[bytes] = '\0';
+                string rawRequest(buffer);
+                HttpRequest request =parseRequest(rawRequest);
+                Logger::log(request.method + " "  + request.path);
+                string body = router.route(request.path);
+
+                int status =200;
+                if(body.empty()){
+                    body="<h1>404 Not Found </h1>";
+                    status=404;
+                }
+                string statusText =
+                (status == 200)? "OK": "Not Found";
+
+
+                string response =
+                "HTTP/1.1 "+to_string(status)+" "+statusText +"\r\n"+
+                "Content-Type: text/html\r\n" +
+                "Content-Length: " + to_string(body.size()) + "\r\n"+
+                "Connection: close\r\n"+
+                "\r\n" +
+                body;
+                cout
+                    << "Method: "
+                    << request.method
+                    << endl;
+
+                cout
+                    << "Path: "
+                    << request.path
+                    << endl;
+
+                cout
+                    << "Version: "
+                    << request.version
+                    << endl;
+                ssize_t bytesSent = send(currentFd,response.c_str(),response.size(),0);
+
+                epoll_ctl(epollFd,EPOLL_CTL_DEL,currentFd,nullptr);
+                close(currentFd);
+
             }
-            close(clientSocket);
-            continue;
         }
-        if(bytes == 0){
-            close(clientSocket);
-            continue;
-        }
-
-        buffer[bytes] = '\0';
-        string rawRequest(buffer);
-        HttpRequest request =parseRequest(rawRequest);
-        Logger::log(request.method + " "  + request.path);
-        string body = router.route(request.path);
-
-        string response =
-        "HTTP/1.1 200 OK\r\n"
-        "Content-Type: text/html\r\n"
-        "Content-Length: " + to_string(body.size()) + "\r\n"
-        "Connection: close\r\n"
-        "\r\n" +
-        body;
-        std::cout
-            << "Method: "
-            << request.method
-            << std::endl;
-
-        std::cout
-            << "Path: "
-            << request.path
-            << std::endl;
-
-        std::cout
-            << "Version: "
-            << request.version
-            << std::endl;
-        send(clientSocket,response.c_str(),response.size(),0);
-        close(clientSocket);
-
+    
     }
+        
+        
     close(serverSocket);
     return 0;
 } 

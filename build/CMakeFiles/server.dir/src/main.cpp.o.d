@@ -203,4 +203,12 @@ CMakeFiles/server.dir/src/main.cpp.o: \
  /usr/include/c++/13/bits/uniform_int_dist.h \
  /usr/include/c++/13/bits/stl_tempbuf.h \
  /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/include/FileManager.h \
- /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/include/Logger.h
+ /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/include/Logger.h \
+ /usr/include/fcntl.h /usr/include/x86_64-linux-gnu/bits/fcntl.h \
+ /usr/include/x86_64-linux-gnu/bits/fcntl-linux.h \
+ /usr/include/linux/falloc.h /usr/include/x86_64-linux-gnu/bits/stat.h \
+ /usr/include/x86_64-linux-gnu/bits/struct_stat.h \
+ /usr/include/x86_64-linux-gnu/sys/epoll.h \
+ /usr/lib/gcc/x86_64-linux-gnu/13/include/stdint.h /usr/include/stdint.h \
+ /usr/include/x86_64-linux-gnu/bits/stdint-least.h \
+ /usr/include/x86_64-linux-gnu/bits/epoll.h
