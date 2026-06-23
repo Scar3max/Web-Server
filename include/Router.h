@@ -4,11 +4,10 @@
 #include<unordered_map>
 #include<functional>
 
-using namespace std;
 class Router{
     private:
-        unordered_map<string,function<string()>> routes;
+        std::unordered_map<std::string,std::function<std::string()>> routes;
     public:
-        void addRoute(const string& path,function<string()>handler);
-        string route(const string& path);
+        void addRoute(const std::string& path,std::function<std::string()>handler);
+        std::string route(const std::string& path);
 };

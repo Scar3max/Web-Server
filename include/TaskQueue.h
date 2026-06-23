@@ -5,23 +5,22 @@
 #include<mutex>
 #include<condition_variable>
 #include "Router.h"
-using namespace std;
 
 struct Task{
     int clientSocket;
-    string rawRequest;
+    std::string rawRequest;
     Router* router;
 };
 
 class TaskQueue{
     private:
-        queue<Task> tasks;
-        mutex queueMutex;
-        condition_variable cv;
+        std::queue<Task> tasks;
+        std::mutex queueMutex;
+        std::condition_variable cv;
         bool stop =false;
     public:
         void push(Task task);
-        optional<Task> pop();
+        std::optional<Task> pop();
         void notifyAll();
         void shutdown();
 };

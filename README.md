@@ -162,6 +162,3 @@ This project was built incrementally — each commit represents a distinct archi
 - [ ] Request body parsing for POST/PUT methods
 - [ ] Benchmarking with `wrk` or `ab` against Nginx/Node.js
 
-## License
-
-MIT

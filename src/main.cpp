@@ -16,6 +16,12 @@
 #include "ThreadPool.h"
 using namespace std;
 
+constexpr int SERVER_PORT       = 8080;
+constexpr int THREAD_POOL_SIZE  = 8;
+constexpr int RECV_BUFFER_SIZE  = 4096;
+constexpr int MAX_EPOLL_EVENTS  = 64;
+constexpr int LISTEN_BACKLOG    = 128;
+
 string HomeHandler(){
     return FileManager::readFile("../static/index.html");
 }
@@ -29,18 +35,20 @@ int main(){
     router.addRoute("/about",AboutHandler);
     
     TaskQueue  taskQueue;
-    ThreadPool pool(8,taskQueue);
+    ThreadPool pool(THREAD_POOL_SIZE,taskQueue);
+
     int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
-    int serverFlags=fcntl(serverSocket,F_GETFL,0);
-    fcntl(serverSocket,F_SETFL,serverFlags|O_NONBLOCK);
-    
     if(serverSocket<0){
         perror("Socket Failed!!");
         exit(EXIT_FAILURE);
     }
+
+    int serverFlags=fcntl(serverSocket,F_GETFL,0);
+    fcntl(serverSocket,F_SETFL,serverFlags|O_NONBLOCK);
+
     struct sockaddr_in serverAddr{};
     serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port = htons(8080);
+    serverAddr.sin_port = htons(SERVER_PORT);
     serverAddr.sin_addr.s_addr = INADDR_ANY;
     int opt = 1;
 
@@ -50,14 +58,15 @@ int main(){
             &opt,
             sizeof(opt)) < 0)
     {
-    perror("setsockopt");
-}
+        perror("setsockopt");
+        exit(EXIT_FAILURE);
+    }
     if(bind(serverSocket,(struct sockaddr*)&serverAddr,sizeof(serverAddr))<0)
     {
         perror("Bind Failed");
         exit(EXIT_FAILURE);
     }	
-    if(listen(serverSocket,5)<0){
+    if(listen(serverSocket,LISTEN_BACKLOG)<0){
         perror("Listen Failed");
         exit(EXIT_FAILURE);
     }
@@ -73,12 +82,12 @@ int main(){
         perror("epoll_ctl");
         exit(EXIT_FAILURE);
     }
-    epoll_event events[64];
+    epoll_event events[MAX_EPOLL_EVENTS];
     sockaddr_in clientAddr{};
     socklen_t clientLen = sizeof(clientAddr);
-    Logger::log("Server Started");
+    Logger::log("Server Started on port " + to_string(SERVER_PORT));
     while(true){
-        int readyCount = epoll_wait(epollFd,events,64,-1);
+        int readyCount = epoll_wait(epollFd,events,MAX_EPOLL_EVENTS,-1);
         if(readyCount < 0){
             perror("epoll_wait");
             continue;
@@ -113,7 +122,7 @@ int main(){
                 }
             }
             else{
-                char buffer[4096];
+                char buffer[RECV_BUFFER_SIZE];
 
                 int bytes = recv(currentFd, buffer, sizeof(buffer)-1,0);
                 if(bytes < 0){
@@ -131,16 +140,20 @@ int main(){
                 }
 
                 buffer[bytes]='\0';
-                
+
+                string rawRequest(buffer);
+                if(rawRequest.find("\r\n\r\n") == string::npos){
+                    epoll_ctl(epollFd,EPOLL_CTL_DEL,currentFd,nullptr);
+                    close(currentFd);
+                    continue;
+                }
+
                 Task task;
                 task.clientSocket = currentFd;
-                task.rawRequest=buffer;
+                task.rawRequest = rawRequest;
                 task.router=&router;
                 epoll_ctl(epollFd,EPOLL_CTL_DEL,currentFd,nullptr);
-                //cout<< "Task pushed"<< endl;
                 taskQueue.push(task);
-                
-
             }
         }
     

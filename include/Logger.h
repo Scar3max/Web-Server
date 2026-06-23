@@ -1,9 +1,8 @@
 #pragma once
 #include <string>
 
-using namespace std;
 class Logger{
     public:
-        static void log(const string& message);
-        static string getTime();
+        static void log(const std::string& message);
+        static std::string getTime();
 };
