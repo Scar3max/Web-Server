@@ -225,6 +225,54 @@ src/Router.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/src/Router.cpp.s
 .PHONY : src/Router.cpp.s
 
+src/TaskQueue.o: src/TaskQueue.cpp.o
+.PHONY : src/TaskQueue.o
+
+# target to build an object file
+src/TaskQueue.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/src/TaskQueue.cpp.o
+.PHONY : src/TaskQueue.cpp.o
+
+src/TaskQueue.i: src/TaskQueue.cpp.i
+.PHONY : src/TaskQueue.i
+
+# target to preprocess a source file
+src/TaskQueue.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/src/TaskQueue.cpp.i
+.PHONY : src/TaskQueue.cpp.i
+
+src/TaskQueue.s: src/TaskQueue.cpp.s
+.PHONY : src/TaskQueue.s
+
+# target to generate assembly for a file
+src/TaskQueue.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/src/TaskQueue.cpp.s
+.PHONY : src/TaskQueue.cpp.s
+
+src/ThreadPool.o: src/ThreadPool.cpp.o
+.PHONY : src/ThreadPool.o
+
+# target to build an object file
+src/ThreadPool.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/src/ThreadPool.cpp.o
+.PHONY : src/ThreadPool.cpp.o
+
+src/ThreadPool.i: src/ThreadPool.cpp.i
+.PHONY : src/ThreadPool.i
+
+# target to preprocess a source file
+src/ThreadPool.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/src/ThreadPool.cpp.i
+.PHONY : src/ThreadPool.cpp.i
+
+src/ThreadPool.s: src/ThreadPool.cpp.s
+.PHONY : src/ThreadPool.s
+
+# target to generate assembly for a file
+src/ThreadPool.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/src/ThreadPool.cpp.s
+.PHONY : src/ThreadPool.cpp.s
+
 src/main.o: src/main.cpp.o
 .PHONY : src/main.o
 
@@ -270,6 +318,12 @@ help:
 	@echo "... src/Router.o"
 	@echo "... src/Router.i"
 	@echo "... src/Router.s"
+	@echo "... src/TaskQueue.o"
+	@echo "... src/TaskQueue.i"
+	@echo "... src/TaskQueue.s"
+	@echo "... src/ThreadPool.o"
+	@echo "... src/ThreadPool.i"
+	@echo "... src/ThreadPool.s"
 	@echo "... src/main.o"
 	@echo "... src/main.i"
 	@echo "... src/main.s"

@@ -12,7 +12,8 @@
 #include <fcntl.h>
 #include <cerrno>
 #include<sys/epoll.h>
-
+#include "TaskQueue.h"
+#include "ThreadPool.h"
 using namespace std;
 
 string HomeHandler(){
@@ -27,6 +28,8 @@ int main(){
     router.addRoute("/",HomeHandler);
     router.addRoute("/about",AboutHandler);
     
+    TaskQueue  taskQueue;
+    ThreadPool pool(8,taskQueue);
     int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
     int serverFlags=fcntl(serverSocket,F_GETFL,0);
     fcntl(serverSocket,F_SETFL,serverFlags|O_NONBLOCK);
@@ -127,46 +130,16 @@ int main(){
                     continue;
                 }
 
-                buffer[bytes] = '\0';
-                string rawRequest(buffer);
-                HttpRequest request =parseRequest(rawRequest);
-                Logger::log(request.method + " "  + request.path);
-                string body = router.route(request.path);
-
-                int status =200;
-                if(body.empty()){
-                    body="<h1>404 Not Found </h1>";
-                    status=404;
-                }
-                string statusText =
-                (status == 200)? "OK": "Not Found";
-
-
-                string response =
-                "HTTP/1.1 "+to_string(status)+" "+statusText +"\r\n"+
-                "Content-Type: text/html\r\n" +
-                "Content-Length: " + to_string(body.size()) + "\r\n"+
-                "Connection: close\r\n"+
-                "\r\n" +
-                body;
-                cout
-                    << "Method: "
-                    << request.method
-                    << endl;
-
-                cout
-                    << "Path: "
-                    << request.path
-                    << endl;
-
-                cout
-                    << "Version: "
-                    << request.version
-                    << endl;
-                ssize_t bytesSent = send(currentFd,response.c_str(),response.size(),0);
-
+                buffer[bytes]='\0';
+                
+                Task task;
+                task.clientSocket = currentFd;
+                task.rawRequest=buffer;
+                task.router=&router;
                 epoll_ctl(epollFd,EPOLL_CTL_DEL,currentFd,nullptr);
-                close(currentFd);
+                //cout<< "Task pushed"<< endl;
+                taskQueue.push(task);
+                
 
             }
         }
