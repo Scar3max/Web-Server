@@ -4,7 +4,9 @@
 #include <deque>
 #include <vector>
 #include <string>
+#include <unordered_map>
 #include <cstdint>
+#include "Room.h"
 
 struct PlayerSnapshot {
     uint32_t id = 0;
@@ -15,9 +17,14 @@ struct PlayerSnapshot {
 };
 
 struct WorldSnapshot {
+    uint32_t roomId = 0;
+    std::string roomCode;
+    RoomState roomState = RoomState::WAITING;
+    double countdown = 0.0;
     uint64_t tick = 0;
     uint64_t timestamp = 0;
     std::vector<PlayerSnapshot> players;
+    std::vector<FinishResult> results;
 
     std::string toJson() const;
 };
@@ -27,7 +34,7 @@ private:
     std::mutex queueMutex;
     std::deque<WorldSnapshot> snapshots;
     int wakeupFd = -1;
-    static constexpr size_t MAX_CAPACITY = 32;
+    static constexpr size_t MAX_CAPACITY = 256;
     size_t highWaterMark = 0;
     uint64_t totalPushed = 0;
     uint64_t totalDropped = 0;
@@ -43,6 +50,7 @@ public:
     void push(WorldSnapshot snapshot);
     std::vector<WorldSnapshot> popAll();
     bool popLatest(WorldSnapshot& outSnap);
+    std::vector<WorldSnapshot> popLatestPerRoom();
     size_t size();
     size_t getHighWaterMark();
     uint64_t getTotalPushed();

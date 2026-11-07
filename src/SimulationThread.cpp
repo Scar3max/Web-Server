@@ -1,9 +1,18 @@
 #include "SimulationThread.h"
 #include <chrono>
 #include <iostream>
+#include <algorithm>
 
 SimulationThread::SimulationThread(InputQueue& inQ, SnapshotQueue& snapQ)
-    : inputQueue(inQ), snapshotQueue(snapQ) {}
+    : inputQueue(inQ), snapshotQueue(snapQ) {
+    // Initialize default global world (roomId = 0) for Phase 4 backward compatibility
+    RoomSim defaultRoom;
+    defaultRoom.roomId = 0;
+    defaultRoom.roomCode = "DEFAULT";
+    defaultRoom.state = RoomState::RACING;
+    defaultRoom.trackLength = 1000000.0; // effectively continuous driving
+    roomSims[0] = std::move(defaultRoom);
+}
 
 SimulationThread::~SimulationThread() {
     stop();
@@ -48,61 +57,191 @@ void SimulationThread::runLoop() {
         inputs.clear();
         inputQueue.drain(events, inputs);
 
-        // Process Joins and Leaves
+        // Process Lifecycle Events
         for (const auto& ev : events) {
             if (ev.type == PlayerEvent::Type::JOIN) {
-                PlayerState newState(ev.playerId, ev.socketFd, ev.connectionId);
-                // Stagger starting lateral positions across 3 lanes
-                double laneOffset = static_cast<double>((ev.playerId - 1) % 3 - 1) * 0.45;
+                // Default global room join (Phase 4 compatibility)
+                PlayerState newState(ev.playerId, ev.socketFd, ev.connectionId, 0, ev.playerName);
+                double laneOffset = static_cast<double>(static_cast<int>(ev.playerId - 1) % 3 - 1) * 0.45;
                 newState.x = laneOffset;
-                players[ev.playerId] = newState;
+                roomSims[0].vehicles[ev.playerId] = newState;
+                roomSims[0].playerNames[ev.playerId] = ev.playerName;
             } else if (ev.type == PlayerEvent::Type::LEAVE) {
-                players.erase(ev.playerId);
+                // Leave from any room containing this player
+                for (auto& [rid, rsim] : roomSims) {
+                    rsim.vehicles.erase(ev.playerId);
+                    rsim.playerNames.erase(ev.playerId);
+                    if (rid != 0 && rsim.state == RoomState::COUNTDOWN && rsim.vehicles.size() < 2) {
+                        rsim.state = RoomState::WAITING;
+                        rsim.countdownRemaining = 5.0;
+                    }
+                }
+            } else if (ev.type == PlayerEvent::Type::ROOM_JOIN) {
+                auto& rsim = roomSims[ev.roomId];
+                rsim.roomId = ev.roomId;
+                rsim.roomCode = ev.roomCode;
+                rsim.trackLength = ev.trackLength;
+
+                PlayerState newState(ev.playerId, ev.socketFd, ev.connectionId, ev.roomId, ev.playerName);
+                double laneOffset = static_cast<double>(static_cast<int>(ev.lane % 3) - 1) * 0.45;
+                newState.x = laneOffset;
+                rsim.vehicles[ev.playerId] = newState;
+                rsim.playerNames[ev.playerId] = ev.playerName;
+            } else if (ev.type == PlayerEvent::Type::ROOM_LEAVE) {
+                auto rIt = roomSims.find(ev.roomId);
+                if (rIt != roomSims.end()) {
+                    rIt->second.vehicles.erase(ev.playerId);
+                    rIt->second.playerNames.erase(ev.playerId);
+                    if (rIt->second.state == RoomState::COUNTDOWN && rIt->second.vehicles.size() < 2) {
+                        rIt->second.state = RoomState::WAITING;
+                        rIt->second.countdownRemaining = 5.0;
+                    }
+                }
+            } else if (ev.type == PlayerEvent::Type::START_COUNTDOWN) {
+                auto rIt = roomSims.find(ev.roomId);
+                if (rIt != roomSims.end()) {
+                    auto& rsim = rIt->second;
+                    rsim.state = RoomState::COUNTDOWN;
+                    rsim.countdownRemaining = 5.0;
+                    rsim.results.clear();
+                    rsim.nextFinishRank = 1;
+                    rsim.trackLength = ev.trackLength;
+
+                    // Reset vehicle kinematics and lanes for starting grid
+                    uint32_t laneIdx = 0;
+                    for (auto& [pid, v] : rsim.vehicles) {
+                        v.distance = 0.0;
+                        v.speed = 0.0;
+                        v.steerAngle = 0.0;
+                        v.finished = false;
+                        v.finishTime = 0.0;
+                        v.finishRank = 0;
+                        v.controls = {};
+                        v.x = static_cast<double>(static_cast<int>(laneIdx % 3) - 1) * 0.45;
+                        laneIdx++;
+                    }
+                }
+            } else if (ev.type == PlayerEvent::Type::CANCEL_COUNTDOWN) {
+                auto rIt = roomSims.find(ev.roomId);
+                if (rIt != roomSims.end()) {
+                    rIt->second.state = RoomState::WAITING;
+                    rIt->second.countdownRemaining = 5.0;
+                }
+            } else if (ev.type == PlayerEvent::Type::DESTROY_ROOM) {
+                roomSims.erase(ev.roomId);
             }
         }
 
         // Process Input Commands
         for (const auto& in : inputs) {
-            auto it = players.find(in.playerId);
-            if (it != players.end()) {
-                // Validate monotonically increasing sequence number
-                if (in.seq > it->second.lastInputSeq) {
-                    it->second.lastInputSeq = in.seq;
-                    it->second.controls = in.controls;
-                    it->second.lastInputTime = clock::now();
+            auto rIt = roomSims.find(in.roomId);
+            if (rIt != roomSims.end()) {
+                auto& rsim = rIt->second;
+                // Allow driving inputs only during RACING state
+                if (rsim.state == RoomState::RACING) {
+                    auto pIt = rsim.vehicles.find(in.playerId);
+                    if (pIt != rsim.vehicles.end() && !pIt->second.finished) {
+                        if (in.seq > pIt->second.lastInputSeq) {
+                            pIt->second.lastInputSeq = in.seq;
+                            pIt->second.controls = in.controls;
+                            pIt->second.lastInputTime = clock::now();
+                        }
+                    }
                 }
             }
         }
 
-        // 2. Advance Authoritative Vehicle Physics for all active players
-        for (auto& [id, player] : players) {
-            physics::updateVehicle(player, player.controls, physics::Config::FIXED_DT);
+        // 2. Advance Authoritative Simulation for all Rooms
+        size_t totalPlayers = 0;
+
+        for (auto& [rid, rsim] : roomSims) {
+            totalPlayers += rsim.vehicles.size();
+
+            if (rsim.state == RoomState::COUNTDOWN) {
+                rsim.countdownRemaining -= physics::Config::FIXED_DT;
+                if (rsim.countdownRemaining <= 0.0) {
+                    rsim.countdownRemaining = 0.0;
+                    rsim.state = RoomState::RACING;
+                    rsim.raceStartTime = clock::now();
+                }
+            } else if (rsim.state == RoomState::RACING) {
+                bool allFinished = !rsim.vehicles.empty();
+
+                for (auto& [pid, player] : rsim.vehicles) {
+                    if (rid == 0) {
+                        // Global practice world: continuous driving
+                        physics::updateVehicle(player, player.controls, physics::Config::FIXED_DT);
+                        allFinished = false;
+                    } else {
+                        if (player.finished) {
+                            // Finished player: apply braking to bring car to rest cleanly
+                            Controls stopControls{false, true, false, false};
+                            physics::updateVehicle(player, stopControls, physics::Config::FIXED_DT);
+                        } else {
+                            physics::updateVehicle(player, player.controls, physics::Config::FIXED_DT);
+                            if (player.distance >= rsim.trackLength) {
+                                player.finished = true;
+                                player.speed = std::min(player.speed, 60.0);
+                                double elapsed = static_cast<double>(
+                                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        clock::now() - rsim.raceStartTime).count()
+                                ) / 1000.0;
+                                player.finishTime = elapsed;
+                                player.finishRank = rsim.nextFinishRank++;
+
+                                FinishResult res;
+                                res.playerId = pid;
+                                res.name = rsim.playerNames[pid];
+                                res.rank = player.finishRank;
+                                res.finishTime = player.finishTime;
+                                rsim.results.push_back(res);
+                            } else {
+                                allFinished = false;
+                            }
+                        }
+                    }
+                }
+
+                if (rid != 0 && allFinished) {
+                    rsim.state = RoomState::FINISHED;
+                }
+            }
         }
 
-        activePlayerCount.store(players.size(), std::memory_order_relaxed);
+        activePlayerCount.store(totalPlayers, std::memory_order_relaxed);
 
-        // 3. Publish Authoritative World Snapshot at 20 Hz (every 3 ticks)
+        // 3. Publish Authoritative Room Snapshots at 20 Hz (every 3 ticks)
         if (tick % physics::Config::TICKS_PER_SNAPSHOT == 0) {
-            WorldSnapshot snapshot;
-            snapshot.tick = tick;
-
             auto nowEpoch = std::chrono::system_clock::now().time_since_epoch();
-            snapshot.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(nowEpoch).count();
+            uint64_t timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(nowEpoch).count();
 
-            snapshot.players.reserve(players.size());
-            for (const auto& [id, player] : players) {
-                PlayerSnapshot ps;
-                ps.id = player.id;
-                ps.x = player.x;
-                ps.distance = player.distance;
-                ps.speed = player.speed;
-                ps.steer = player.steerAngle;
-                snapshot.players.push_back(ps);
+            for (const auto& [rid, rsim] : roomSims) {
+                if (rid != 0 && (rsim.vehicles.empty() || rsim.state == RoomState::WAITING)) continue;
+
+                WorldSnapshot snapshot;
+                snapshot.roomId = rid;
+                snapshot.roomCode = rsim.roomCode;
+                snapshot.roomState = rsim.state;
+                snapshot.countdown = rsim.countdownRemaining;
+                snapshot.tick = tick;
+                snapshot.timestamp = timestamp;
+                snapshot.results = rsim.results;
+
+                snapshot.players.reserve(rsim.vehicles.size());
+                for (const auto& [id, player] : rsim.vehicles) {
+                    PlayerSnapshot ps;
+                    ps.id = player.id;
+                    ps.x = player.x;
+                    ps.distance = player.distance;
+                    ps.speed = player.speed;
+                    ps.steer = player.steerAngle;
+                    snapshot.players.push_back(ps);
+                }
+
+                snapshotQueue.push(std::move(snapshot));
+                totalSnapshotsPublished.fetch_add(1, std::memory_order_relaxed);
+                snapshotsInWindow++;
             }
-
-            snapshotQueue.push(std::move(snapshot));
-            totalSnapshotsPublished.fetch_add(1, std::memory_order_relaxed);
-            snapshotsInWindow++;
         }
 
         // 4. Calculate actual tick rate and snapshot rate diagnostic every 1 second

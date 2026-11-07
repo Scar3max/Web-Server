@@ -2,10 +2,15 @@
 #include <unistd.h>
 #include <sstream>
 #include <iomanip>
+#include <unordered_map>
 
 std::string WorldSnapshot::toJson() const {
     std::ostringstream oss;
-    oss << "{\"type\":\"snapshot\",\"tick\":" << tick
+    oss << "{\"type\":\"snapshot\",\"roomId\":" << roomId
+        << ",\"roomCode\":\"" << roomCode << "\""
+        << ",\"state\":\"" << roomStateToString(roomState) << "\""
+        << ",\"countdown\":" << std::fixed << std::setprecision(1) << countdown
+        << ",\"tick\":" << tick
         << ",\"timestamp\":" << timestamp
         << ",\"players\":[";
 
@@ -17,6 +22,16 @@ std::string WorldSnapshot::toJson() const {
             << ",\"distance\":" << std::fixed << std::setprecision(2) << p.distance
             << ",\"speed\":" << std::fixed << std::setprecision(2) << p.speed
             << ",\"steer\":" << std::fixed << std::setprecision(4) << p.steer
+            << "}";
+    }
+    oss << "],\"results\":[";
+    for (size_t i = 0; i < results.size(); i++) {
+        if (i > 0) oss << ",";
+        const auto& r = results[i];
+        oss << "{\"playerId\":" << r.playerId
+            << ",\"name\":\"" << r.name << "\""
+            << ",\"rank\":" << r.rank
+            << ",\"finishTime\":" << std::fixed << std::setprecision(3) << r.finishTime
             << "}";
     }
     oss << "]}";
@@ -61,6 +76,21 @@ bool SnapshotQueue::popLatest(WorldSnapshot& outSnap) {
     outSnap = std::move(snapshots.back());
     snapshots.clear();
     return true;
+}
+
+std::vector<WorldSnapshot> SnapshotQueue::popLatestPerRoom() {
+    std::lock_guard<std::mutex> lock(queueMutex);
+    std::unordered_map<uint32_t, WorldSnapshot> latestByRoom;
+    for (auto& snap : snapshots) {
+        latestByRoom[snap.roomId] = std::move(snap);
+    }
+    snapshots.clear();
+    std::vector<WorldSnapshot> result;
+    result.reserve(latestByRoom.size());
+    for (auto& [rid, snap] : latestByRoom) {
+        result.push_back(std::move(snap));
+    }
+    return result;
 }
 
 size_t SnapshotQueue::size() {

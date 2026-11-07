@@ -3,6 +3,8 @@
 #include <thread>
 #include <atomic>
 #include <unordered_map>
+#include <vector>
+#include <string>
 #include <chrono>
 #include <cstdint>
 
@@ -10,6 +12,20 @@
 #include "Physics.h"
 #include "InputQueue.h"
 #include "SnapshotQueue.h"
+#include "Room.h"
+
+struct RoomSim {
+    uint32_t roomId = 0;
+    std::string roomCode;
+    RoomState state = RoomState::WAITING;
+    double countdownRemaining = 5.0;
+    double trackLength = 1500.0;
+    std::chrono::steady_clock::time_point raceStartTime{};
+    std::unordered_map<uint32_t, PlayerState> vehicles;
+    std::unordered_map<uint32_t, std::string> playerNames;
+    std::vector<FinishResult> results;
+    uint32_t nextFinishRank = 1;
+};
 
 class SimulationThread {
 private:
@@ -19,7 +35,7 @@ private:
     std::thread workerThread;
     std::atomic<bool> running{false};
 
-    std::unordered_map<uint32_t, PlayerState> players;
+    std::unordered_map<uint32_t, RoomSim> roomSims;
     std::atomic<uint64_t> currentTick{0};
 
     // Diagnostics

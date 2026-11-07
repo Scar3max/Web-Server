@@ -4,18 +4,33 @@
 #include <vector>
 #include <unordered_map>
 #include <cstdint>
+#include <string>
 #include <algorithm>
 #include "Player.h"
 
 struct PlayerEvent {
-    enum class Type { JOIN, LEAVE };
-    Type type;
+    enum class Type {
+        JOIN,
+        LEAVE,
+        ROOM_JOIN,
+        ROOM_LEAVE,
+        START_COUNTDOWN,
+        CANCEL_COUNTDOWN,
+        DESTROY_ROOM
+    };
+    Type type = Type::JOIN;
+    uint32_t roomId = 0;
+    std::string roomCode;
     uint32_t playerId = 0;
     int socketFd = -1;
     uint64_t connectionId = 0;
+    std::string playerName;
+    uint32_t lane = 0;
+    double trackLength = 1500.0;
 };
 
 struct PlayerInput {
+    uint32_t roomId = 0;
     uint32_t playerId = 0;
     uint64_t seq = 0;
     Controls controls;
@@ -46,7 +61,7 @@ private:
 public:
     InputQueue() = default;
 
-    // Attempts to admit a new player JOIN.
+    // Attempts to admit a new player JOIN or ROOM_JOIN.
     // Rejects the JOIN if total admitted players reaches MAX_ACTIVE_PLAYERS
     // or if the event queue cannot accommodate the JOIN plus reserved LEAVE capacity.
     bool pushJoin(PlayerEvent ev) {
@@ -74,7 +89,7 @@ public:
         return true;
     }
 
-    // Pushes a player LEAVE event.
+    // Pushes a player LEAVE or ROOM_LEAVE event.
     // Guaranteed to succeed because capacity was explicitly reserved during pushJoin.
     // Immediately purges any unconsumed pending inputs for the departing player.
     bool pushLeave(PlayerEvent ev) {
@@ -91,6 +106,17 @@ public:
 
         // 3. Enqueue LEAVE event
         if (eventQueue.size() < MAX_LIFECYCLE_CAPACITY) {
+            eventQueue.push_back(std::move(ev));
+            highWaterEvents = std::max(highWaterEvents, eventQueue.size());
+            return true;
+        }
+        return false;
+    }
+
+    // Pushes a room lifecycle event that does not modify player count (START_COUNTDOWN, CANCEL_COUNTDOWN, DESTROY_ROOM)
+    bool pushEvent(PlayerEvent ev) {
+        std::lock_guard<std::mutex> lock(queueMutex);
+        if (eventQueue.size() + activeAdmittedPlayers < MAX_LIFECYCLE_CAPACITY) {
             eventQueue.push_back(std::move(ev));
             highWaterEvents = std::max(highWaterEvents, eventQueue.size());
             return true;
