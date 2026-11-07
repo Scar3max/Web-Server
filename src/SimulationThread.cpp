@@ -254,6 +254,7 @@ void SimulationThread::runLoop() {
                     ps.worldX = player.worldX;
                     ps.worldY = player.worldY;
                     ps.heading = player.heading;
+                    ps.ackSeq = player.lastInputSeq;
                     snapshot.players.push_back(ps);
                 }
 

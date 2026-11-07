@@ -25,6 +25,7 @@ std::string WorldSnapshot::toJson() const {
             << ",\"worldX\":" << std::fixed << std::setprecision(2) << p.worldX
             << ",\"worldY\":" << std::fixed << std::setprecision(2) << p.worldY
             << ",\"heading\":" << std::fixed << std::setprecision(4) << p.heading
+            << ",\"ackSeq\":" << p.ackSeq
             << "}";
     }
     oss << "],\"results\":[";

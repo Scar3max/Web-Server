@@ -17,6 +17,7 @@ struct PlayerSnapshot {
     double worldX = 0.0;
     double worldY = 0.0;
     double heading = 0.0;
+    uint64_t ackSeq = 0; // Sequence number of latest client input applied by server
 };
 
 struct WorldSnapshot {
