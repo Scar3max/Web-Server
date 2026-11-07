@@ -75,8 +75,10 @@ void resolveRoomCollisions(std::unordered_map<uint32_t, PlayerState>& vehicles,
     double halfWidth = track.getTrackWidth() * 0.5;
     double dLimit = halfWidth - 0.2; // Keep at least 0.2m inside curbs
 
-    // Run 2 relaxation solver passes for multi-car stability
-    for (int pass = 0; pass < 2; pass++) {
+    // Run up to 24 relaxation passes for multi-body stability, stopping early if settled
+    for (int pass = 0; pass < 24; pass++) {
+        double maxPenetrationThisPass = 0.0;
+
         for (size_t i = 0; i < pids.size(); i++) {
             for (size_t j = i + 1; j < pids.size(); j++) {
                 auto& pA = vehicles[pids[i]];
@@ -96,12 +98,21 @@ void resolveRoomCollisions(std::unordered_map<uint32_t, PlayerState>& vehicles,
                 double dist = std::sqrt(ds * ds + dd * dd);
                 if (dist < CollisionConfig::MIN_SEPARATION_DIST) {
                     double penetration = CollisionConfig::MIN_SEPARATION_DIST - dist;
+                    if (penetration > maxPenetrationThisPass) {
+                        maxPenetrationThisPass = penetration;
+                    }
 
                     double ns = 0.0;
                     double nd = 1.0;
                     if (dist > 1e-4) {
                         ns = ds / dist;
                         nd = dd / dist;
+                    } else {
+                        // Degenerate overlap: if both at right boundary, separate longitudinally
+                        if (dA > (dLimit - 1.0)) {
+                            ns = 1.0;
+                            nd = 0.0;
+                        }
                     }
 
                     if (outEvents && pass == 0) {
@@ -113,35 +124,69 @@ void resolveRoomCollisions(std::unordered_map<uint32_t, PlayerState>& vehicles,
                         outEvents->push_back(ev);
                     }
 
-                    // 1. Position Resolution (De-penetration)
+                    // 1. Position Resolution (De-penetration with Boundary Transfer)
                     if (!pA.finished && !pB.finished) {
                         pA.distance -= 0.5 * penetration * ns;
-                        dA -= 0.5 * penetration * nd;
                         pB.distance += 0.5 * penetration * ns;
-                        dB += 0.5 * penetration * nd;
+
+                        double delta_dA = -0.5 * penetration * nd;
+                        double delta_dB = +0.5 * penetration * nd;
+
+                        double new_dA = dA + delta_dA;
+                        double new_dB = dB + delta_dB;
+
+                        // Wall boundary shortfall transfer
+                        if (new_dA < -dLimit) {
+                            double shortfall = (-dLimit) - new_dA;
+                            new_dA = -dLimit;
+                            new_dB = std::min(dLimit, new_dB + shortfall);
+                        } else if (new_dA > dLimit) {
+                            double shortfall = new_dA - dLimit;
+                            new_dA = dLimit;
+                            new_dB = std::max(-dLimit, new_dB - shortfall);
+                        }
+
+                        if (new_dB > dLimit) {
+                            double shortfall = new_dB - dLimit;
+                            new_dB = dLimit;
+                            new_dA = std::max(-dLimit, new_dA - shortfall);
+                        } else if (new_dB < -dLimit) {
+                            double shortfall = (-dLimit) - new_dB;
+                            new_dB = -dLimit;
+                            new_dA = std::min(dLimit, new_dA + shortfall);
+                        }
+
+                        dA = new_dA;
+                        dB = new_dB;
                     } else if (pA.finished && !pB.finished) {
-                        // A is finished; B takes full displacement
+                        // A is finished and static; B takes 100% displacement
                         pB.distance += penetration * ns;
-                        dB += penetration * nd;
+                        dB = std::clamp(dB + penetration * nd, -dLimit, dLimit);
                     } else if (!pA.finished && pB.finished) {
-                        // B is finished; A takes full displacement
+                        // B is finished and static; A takes 100% displacement
                         pA.distance -= penetration * ns;
-                        dA -= penetration * nd;
+                        dA = std::clamp(dA - penetration * nd, -dLimit, dLimit);
                     }
 
-                    // Boundary enforcement
-                    dA = std::clamp(dA, -dLimit, dLimit);
-                    dB = std::clamp(dB, -dLimit, dLimit);
                     pA.x = std::clamp(dA / halfWidth, -1.0, 1.0);
                     pB.x = std::clamp(dB / halfWidth, -1.0, 1.0);
 
-                    // 2. Velocity Impulse Resolution (only on first pass to prevent over-damping)
+                    // 2. Velocity Impulse Resolution (applied strictly on pass 0)
                     if (pass == 0) {
                         double vsA = pA.speed * (1000.0 / 3600.0);
                         double vsB = pB.speed * (1000.0 / 3600.0);
-                        double relV = (vsB - vsA) * ns;
 
-                        if (relV < 0.0) { // Approaching each other
+                        double vFactorA = std::min(1.0, pA.speed / 40.0);
+                        double vFactorB = std::min(1.0, pB.speed / 40.0);
+
+                        double vdA = (pA.controls.left ? -1.0 : (pA.controls.right ? 1.0 : 0.0)) *
+                                     Config::STEER_LATERAL_SPEED * vFactorA * halfWidth;
+                        double vdB = (pB.controls.left ? -1.0 : (pB.controls.right ? 1.0 : 0.0)) *
+                                     Config::STEER_LATERAL_SPEED * vFactorB * halfWidth;
+
+                        double relV = (vsB - vsA) * ns + (vdB - vdA) * nd;
+
+                        if (relV < 0.0) { // Approaching along collision normal
                             double impulse = -(1.0 + CollisionConfig::RESTITUTION) * relV * 0.5;
                             double maxImp = CollisionConfig::MAX_IMPULSE_SPEED * (1000.0 / 3600.0);
                             impulse = std::min(impulse, maxImp);
@@ -161,6 +206,10 @@ void resolveRoomCollisions(std::unordered_map<uint32_t, PlayerState>& vehicles,
 
                             pA.speed = std::clamp(vsA * 3.6, 0.0, Config::MAX_FORWARD_SPEED);
                             pB.speed = std::clamp(vsB * 3.6, 0.0, Config::MAX_FORWARD_SPEED);
+                        } else {
+                            // Sliding contact: apply light friction scrub to prevent free coasting through contacts
+                            if (!pA.finished) pA.speed *= (1.0 - CollisionConfig::COLLISION_SPEED_SCRUB * 0.5);
+                            if (!pB.finished) pB.speed *= (1.0 - CollisionConfig::COLLISION_SPEED_SCRUB * 0.5);
                         }
                     }
 
@@ -176,6 +225,11 @@ void resolveRoomCollisions(std::unordered_map<uint32_t, PlayerState>& vehicles,
                     pB.heading = sB.angle + pB.steerAngle;
                 }
             }
+        }
+
+        // If all penetrations have resolved below 0.1 mm, relaxation is converged
+        if (maxPenetrationThisPass < 1e-4) {
+            break;
         }
     }
 }
