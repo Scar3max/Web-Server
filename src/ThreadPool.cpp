@@ -1,6 +1,7 @@
 #include "ThreadPool.h"
 #include "HttpRequest.h"
 #include "HttpParser.h"
+#include "Router.h"
 #include <string>
 
 using namespace std;
@@ -20,19 +21,16 @@ void ThreadPool::worker() {
         }
 
         HttpRequest request = parseRequest(task->rawRequest);
-        string body = task->router->route(request.path);
-        int status = 200;
-        if (body.empty()) {
-            body = "<h1>404 Not Found</h1>";
-            status = 404;
-        }
-        string statusText = (status == 200) ? "OK" : "Not Found";
+        HttpResponse httpResp = task->router->route(request.path);
 
-        string response = "HTTP/1.1 " + to_string(status) + " " + statusText + "\r\n"
-                        + "Content-Type: text/html\r\n"
-                        + "Content-Length: " + to_string(body.size()) + "\r\n"
+        string statusText = (httpResp.status == 200) ? "OK" :
+                            (httpResp.status == 404 ? "Not Found" : "Error");
+
+        string response = "HTTP/1.1 " + to_string(httpResp.status) + " " + statusText + "\r\n"
+                        + "Content-Type: " + httpResp.contentType + "\r\n"
+                        + "Content-Length: " + to_string(httpResp.body.size()) + "\r\n"
                         + "Connection: close\r\n\r\n"
-                        + body;
+                        + httpResp.body;
 
         HttpResponseMessage respMsg;
         respMsg.connectionId = task->connectionId;

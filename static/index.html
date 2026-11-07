@@ -3,139 +3,74 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>High-Performance C++ Server</title>
-    <meta name="description" content="A lightweight, event-driven HTTP server built from scratch in C++20.">
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap');
-        
-        :root {
-            --bg-color: #0f172a;
-            --text-main: #f8fafc;
-            --text-muted: #94a3b8;
-            --accent: #3b82f6;
-            --accent-gradient: linear-gradient(135deg, #3b82f6, #8b5cf6);
-            --card-bg: rgba(30, 41, 59, 0.7);
-            --card-border: rgba(255, 255, 255, 0.1);
-        }
-
-        body {
-            font-family: 'Outfit', sans-serif;
-            background-color: var(--bg-color);
-            color: var(--text-main);
-            margin: 0;
-            padding: 0;
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            background-image: radial-gradient(circle at top right, rgba(59, 130, 246, 0.15), transparent 40%),
-                              radial-gradient(circle at bottom left, rgba(139, 92, 246, 0.15), transparent 40%);
-        }
-
-        nav {
-            position: absolute;
-            top: 2rem;
-            display: flex;
-            gap: 2rem;
-            background: rgba(30, 41, 59, 0.5);
-            padding: 0.8rem 2rem;
-            border-radius: 99px;
-            backdrop-filter: blur(10px);
-            border: 1px solid var(--card-border);
-        }
-
-        nav a {
-            color: var(--text-muted);
-            text-decoration: none;
-            font-weight: 600;
-            transition: color 0.3s ease;
-            font-size: 1.1rem;
-        }
-
-        nav a:hover, nav a.active {
-            color: var(--text-main);
-        }
-
-        .container {
-            max-width: 800px;
-            padding: 3.5rem;
-            background: var(--card-bg);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            border: 1px solid var(--card-border);
-            border-radius: 24px;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-            text-align: center;
-            transform: translateY(0);
-            transition: transform 0.4s ease, box-shadow 0.4s ease;
-            animation: fadeIn 0.8s ease-out;
-        }
-
-        .container:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 35px 60px -15px rgba(0, 0, 0, 0.6);
-        }
-
-        h1 {
-            font-size: 3.5rem;
-            margin: 0 0 1rem 0;
-            background: var(--accent-gradient);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            letter-spacing: -1px;
-        }
-
-        p {
-            color: var(--text-muted);
-            font-size: 1.25rem;
-            line-height: 1.6;
-            margin-bottom: 2.5rem;
-        }
-
-        .features {
-            display: flex;
-            justify-content: center;
-            gap: 1.5rem;
-            flex-wrap: wrap;
-        }
-
-        .badge {
-            background: rgba(59, 130, 246, 0.1);
-            color: #60a5fa;
-            padding: 0.6rem 1.4rem;
-            border-radius: 99px;
-            font-size: 0.95rem;
-            font-weight: 600;
-            border: 1px solid rgba(59, 130, 246, 0.2);
-            transition: all 0.3s ease;
-        }
-
-        .badge:hover {
-            background: rgba(59, 130, 246, 0.2);
-            transform: scale(1.05);
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-    </style>
+    <title>Apex Turbo | Optimized C++ Server</title>
+    <meta name="description" content="High-performance browser racing client powered by custom C++20 epoll and WebSocket server.">
+    <link rel="stylesheet" href="/css/game.css">
 </head>
 <body>
-    <nav>
-        <a href="/" class="active">Home</a>
-        <a href="/about">Architecture</a>
-    </nav>
-    <main class="container">
-        <h1>Optimized C++ Server</h1>
-        <p>You are viewing a page served by a custom-built, ultra-fast HTTP server written entirely in C++20 from first principles. Zero frameworks. Zero dependencies.</p>
-        <div class="features">
-            <span class="badge">Linux epoll</span>
-            <span class="badge">Non-blocking I/O</span>
-            <span class="badge">Thread Pool</span>
+    <header>
+        <div class="brand">
+            <span class="brand-icon">🏎️</span>
+            <span class="brand-title">APEX TURBO</span>
         </div>
+        <nav class="nav-links">
+            <a href="/" class="active">Race Client</a>
+            <a href="/about">Architecture</a>
+        </nav>
+    </header>
+
+    <main class="game-wrapper">
+        <!-- Top HUD -->
+        <section class="game-hud">
+            <div class="hud-stat">
+                <span class="hud-label">Velocity</span>
+                <div class="hud-value speed"><span id="speedValue">0</span> <small style="font-size: 0.8rem; color: var(--text-muted);">KM/H</small></div>
+            </div>
+            <div class="hud-stat">
+                <span class="hud-label">Distance</span>
+                <div class="hud-value" id="distanceValue">0m</div>
+            </div>
+            <div class="hud-stat">
+                <span class="hud-label">Current Lap</span>
+                <div class="hud-value" id="lapValue">1</div>
+            </div>
+            <div id="statusPill" class="status-pill status-connecting">
+                <span class="status-dot"></span>
+                <span id="statusText">Connecting...</span>
+            </div>
+        </section>
+
+        <!-- Canvas Racing Arena -->
+        <section class="canvas-container">
+            <canvas id="gameCanvas" width="960" height="600"></canvas>
+            <div id="pauseOverlay" class="overlay">
+                <h2>RACE PAUSED</h2>
+                <p>Press <kbd>ESC</kbd> to resume driving</p>
+            </div>
+        </section>
+
+        <!-- Controls Legend -->
+        <section class="controls-legend">
+            <div class="control-item"><kbd>W</kbd> or <kbd>↑</kbd> Accelerate</div>
+            <div class="control-item"><kbd>S</kbd> or <kbd>↓</kbd> Brake</div>
+            <div class="control-item"><kbd>A</kbd> or <kbd>←</kbd> Steer Left</div>
+            <div class="control-item"><kbd>D</kbd> or <kbd>→</kbd> Steer Right</div>
+            <div class="control-item"><kbd>ESC</kbd> Pause Game</div>
+        </section>
+
+        <!-- Telemetry & Network Debug Drawer -->
+        <section class="telemetry-card">
+            <div class="telemetry-header">
+                <div class="telemetry-title">
+                    <span>⚡</span>
+                    <span>WebSocket Telemetry (Echo Loopback)</span>
+                </div>
+                <div id="latencyBadge" class="latency-badge">-- ms RTT</div>
+            </div>
+            <pre id="telemetryBox" class="telemetry-box">Initializing telemetry link to /ws...</pre>
+        </section>
     </main>
+
+    <script type="module" src="/js/main.js"></script>
 </body>
 </html>
