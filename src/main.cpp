@@ -34,6 +34,9 @@
 #include "InputQueue.h"
 #include "SnapshotQueue.h"
 #include "SimulationThread.h"
+#include "Room.h"
+#include "RoomManager.h"
+#include "RoomProtocol.h"
 
 using namespace std;
 
@@ -75,44 +78,15 @@ static string LargeHandler() {
     return data;
 }
 
-// Removes a player from the active simulation registry and queues a LEAVE event
-static void removePlayerIfPresent(int fd,
-                                  unordered_map<int, uint32_t>& socketToPlayer,
-                                  unordered_map<uint32_t, int>& playerToSocket,
-                                  unordered_map<uint32_t, uint64_t>& playerLastSeq,
-                                  unordered_map<uint32_t, std::chrono::steady_clock::time_point>& playerLastTime,
-                                  InputQueue& inputQueue) {
-    auto it = socketToPlayer.find(fd);
-    if (it != socketToPlayer.end()) {
-        uint32_t pid = it->second;
-        socketToPlayer.erase(it);
-        playerToSocket.erase(pid);
-        playerLastSeq.erase(pid);
-        playerLastTime.erase(pid);
-
-        PlayerEvent ev;
-        ev.type = PlayerEvent::Type::LEAVE;
-        ev.playerId = pid;
-        inputQueue.pushLeave(ev);
-    }
-}
-
-// Closes a connection, removes it from epoll, cleans up player state, and erases from registry.
+// Forward declaration of closeConnection
 static void closeConnection(int fd, int epollFd,
                             unordered_map<int, Connection>& connections,
                             unordered_map<int, uint32_t>& socketToPlayer,
                             unordered_map<uint32_t, int>& playerToSocket,
                             unordered_map<uint32_t, uint64_t>& playerLastSeq,
                             unordered_map<uint32_t, std::chrono::steady_clock::time_point>& playerLastTime,
-                            InputQueue& inputQueue) {
-    removePlayerIfPresent(fd, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
-    auto it = connections.find(fd);
-    if (it != connections.end()) {
-        epoll_ctl(epollFd, EPOLL_CTL_DEL, fd, nullptr);
-        close(fd);
-        connections.erase(it);
-    }
-}
+                            InputQueue& inputQueue,
+                            RoomManager& roomManager);
 
 // Sends an immediate HTTP error response from the event loop
 static void sendImmediateError(int fd, int statusCode, const string& reason) {
@@ -174,7 +148,142 @@ static bool sendWebSocketFrameSafe(Connection& conn, int epollFd, const string& 
     return true;
 }
 
-// Processes incoming WebSocket text message (input protocol, telemetry echo, or plain text echo)
+// Removes a player from the active simulation registry and rooms, and queues a LEAVE event
+static void removePlayerIfPresent(int fd,
+                                  int epollFd,
+                                  unordered_map<int, Connection>& connections,
+                                  unordered_map<int, uint32_t>& socketToPlayer,
+                                  unordered_map<uint32_t, int>& playerToSocket,
+                                  unordered_map<uint32_t, uint64_t>& playerLastSeq,
+                                  unordered_map<uint32_t, std::chrono::steady_clock::time_point>& playerLastTime,
+                                  InputQueue& inputQueue,
+                                  RoomManager& roomManager) {
+    auto it = socketToPlayer.find(fd);
+    if (it != socketToPlayer.end()) {
+        uint32_t pid = it->second;
+        socketToPlayer.erase(it);
+        playerToSocket.erase(pid);
+        playerLastSeq.erase(pid);
+        playerLastTime.erase(pid);
+
+        uint32_t oldRoomId = 0;
+        bool roomDestroyed = false;
+        uint32_t newHostId = 0;
+        bool countdownCancelled = false;
+
+        if (roomManager.leaveRoom(pid, oldRoomId, roomDestroyed, newHostId, countdownCancelled)) {
+            if (roomDestroyed) {
+                PlayerEvent ev;
+                ev.type = PlayerEvent::Type::DESTROY_ROOM;
+                ev.roomId = oldRoomId;
+                inputQueue.pushEvent(ev);
+            } else {
+                Room* room = roomManager.getRoom(oldRoomId);
+                if (room) {
+                    if (countdownCancelled) {
+                        PlayerEvent ev;
+                        ev.type = PlayerEvent::Type::CANCEL_COUNTDOWN;
+                        ev.roomId = oldRoomId;
+                        inputQueue.pushEvent(ev);
+                    }
+                    PlayerEvent evLeave;
+                    evLeave.type = PlayerEvent::Type::ROOM_LEAVE;
+                    evLeave.roomId = oldRoomId;
+                    evLeave.playerId = pid;
+                    inputQueue.pushEvent(evLeave);
+
+                    string playerLeftMsg = WebSocketFrame::encodeTextFrame(RoomProtocol::makePlayerLeft(*room, pid, newHostId));
+                    string roomUpdatedMsg = WebSocketFrame::encodeTextFrame(RoomProtocol::makeRoomUpdated(*room));
+                    for (const auto& [mPid, m] : room->members) {
+                        auto cIt = connections.find(m.socketFd);
+                        if (cIt != connections.end() && cIt->second.protocol == ConnectionProtocol::WEBSOCKET) {
+                            sendWebSocketFrameSafe(cIt->second, epollFd, playerLeftMsg);
+                            sendWebSocketFrameSafe(cIt->second, epollFd, roomUpdatedMsg);
+                        }
+                    }
+                }
+            }
+        }
+
+        PlayerEvent ev;
+        ev.type = PlayerEvent::Type::LEAVE;
+        ev.playerId = pid;
+        inputQueue.pushLeave(ev);
+    }
+}
+
+// Closes a connection, removes it from epoll, cleans up player state, and erases from registry.
+static void closeConnection(int fd, int epollFd,
+                            unordered_map<int, Connection>& connections,
+                            unordered_map<int, uint32_t>& socketToPlayer,
+                            unordered_map<uint32_t, int>& playerToSocket,
+                            unordered_map<uint32_t, uint64_t>& playerLastSeq,
+                            unordered_map<uint32_t, std::chrono::steady_clock::time_point>& playerLastTime,
+                            InputQueue& inputQueue,
+                            RoomManager& roomManager) {
+    removePlayerIfPresent(fd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
+    auto it = connections.find(fd);
+    if (it != connections.end()) {
+        epoll_ctl(epollFd, EPOLL_CTL_DEL, fd, nullptr);
+        close(fd);
+        connections.erase(it);
+    }
+}
+
+// Helper to look up or admit a new player to the server
+static uint32_t getOrAdmitPlayer(Connection& conn,
+                                 int epollFd,
+                                 unordered_map<int, Connection>& connections,
+                                 unordered_map<int, uint32_t>& socketToPlayer,
+                                 unordered_map<uint32_t, int>& playerToSocket,
+                                 unordered_map<uint32_t, uint64_t>& playerLastSeq,
+                                 unordered_map<uint32_t, std::chrono::steady_clock::time_point>& playerLastTime,
+                                 uint32_t& nextPlayerId,
+                                 InputQueue& inputQueue,
+                                 RoomManager& roomManager) {
+    auto it = socketToPlayer.find(conn.fd);
+    if (it != socketToPlayer.end()) {
+        return it->second;
+    }
+
+    PlayerEvent ev;
+    ev.type = PlayerEvent::Type::JOIN;
+    ev.playerId = nextPlayerId;
+    ev.socketFd = conn.fd;
+    ev.connectionId = conn.id;
+
+    if (!inputQueue.pushJoin(ev)) {
+        json::Value errObj(json::Type::OBJECT);
+        errObj["type"] = "error";
+        errObj["message"] = "Server player capacity reached; please retry later";
+        string errFrame = WebSocketFrame::encodeTextFrame(errObj.serialize());
+        sendWebSocketFrameSafe(conn, epollFd, errFrame);
+
+        string closeFrame = WebSocketFrame::encodeCloseFrame(1013, "Try Again Later");
+        sendWebSocketFrameSafe(conn, epollFd, closeFrame);
+        conn.shouldClose = true;
+        return 0;
+    }
+
+    uint32_t pid = nextPlayerId++;
+    socketToPlayer[conn.fd] = pid;
+    playerToSocket[pid] = conn.fd;
+    playerLastSeq[pid] = 0;
+    playerLastTime[pid] = std::chrono::steady_clock::now();
+
+    json::Value welcome(json::Type::OBJECT);
+    welcome["type"] = "welcome";
+    welcome["playerId"] = static_cast<int64_t>(pid);
+    string welcomeFrame = WebSocketFrame::encodeTextFrame(welcome.serialize());
+    if (!sendWebSocketFrameSafe(conn, epollFd, welcomeFrame)) {
+        closeConnection(conn.fd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
+        return 0;
+    }
+
+    return pid;
+}
+
+// Processes incoming WebSocket text message (room protocol, input protocol, telemetry echo, or plain text echo)
 static void handleWebSocketTextMessage(Connection& conn,
                                        int epollFd,
                                        const string& payload,
@@ -184,72 +293,264 @@ static void handleWebSocketTextMessage(Connection& conn,
                                        unordered_map<uint32_t, uint64_t>& playerLastSeq,
                                        unordered_map<uint32_t, std::chrono::steady_clock::time_point>& playerLastTime,
                                        uint32_t& nextPlayerId,
-                                       InputQueue& inputQueue) {
+                                       InputQueue& inputQueue,
+                                       RoomManager& roomManager) {
     json::Value root;
     std::string err;
     bool isJsonCandidate = (!payload.empty() && (payload.front() == '{' || payload.front() == '['));
     if (!json::parse(payload, root, err) || !root.isObject()) {
         if (isJsonCandidate) {
-            // Malformed JSON: drop safely without echoing
             return;
         }
-        // Plain text: echo back for backwards compatibility with Phase 2 echo tests
         string echo = WebSocketFrame::encodeTextFrame(payload);
         if (!sendWebSocketFrameSafe(conn, epollFd, echo)) {
-            closeConnection(conn.fd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
-            return;
+            closeConnection(conn.fd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
         }
         return;
     }
 
     std::string type = root["type"].asString();
 
-    if (type == "input") {
-        uint32_t pid = 0;
-        auto it = socketToPlayer.find(conn.fd);
-        if (it == socketToPlayer.end()) {
-            // First input message from this client: attempt to admit as active player
-            PlayerEvent ev;
-            ev.type = PlayerEvent::Type::JOIN;
-            ev.playerId = nextPlayerId;
-            ev.socketFd = conn.fd;
-            ev.connectionId = conn.id;
+    if (type == "create_room") {
+        uint32_t pid = getOrAdmitPlayer(conn, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, nextPlayerId, inputQueue, roomManager);
+        if (pid == 0) return;
 
-            if (!inputQueue.pushJoin(ev)) {
-                // Lifecycle admission capacity exhausted or max active players reached!
-                // Reject join cleanly with 1013 Try Again Later
-                json::Value errObj(json::Type::OBJECT);
-                errObj["type"] = "error";
-                errObj["message"] = "Server player capacity reached; please retry later";
-                string errFrame = WebSocketFrame::encodeTextFrame(errObj.serialize());
-                sendWebSocketFrameSafe(conn, epollFd, errFrame);
-
-                string closeFrame = WebSocketFrame::encodeCloseFrame(1013, "Try Again Later");
-                sendWebSocketFrameSafe(conn, epollFd, closeFrame);
-                conn.shouldClose = true;
-                return;
-            }
-
-            pid = nextPlayerId++;
-            socketToPlayer[conn.fd] = pid;
-            playerToSocket[pid] = conn.fd;
-            playerLastSeq[pid] = 0;
-            playerLastTime[pid] = std::chrono::steady_clock::now();
-
-            // Send authoritative welcome message with assigned playerId
-            json::Value welcome(json::Type::OBJECT);
-            welcome["type"] = "welcome";
-            welcome["playerId"] = static_cast<int64_t>(pid);
-            string welcomeFrame = WebSocketFrame::encodeTextFrame(welcome.serialize());
-            if (!sendWebSocketFrameSafe(conn, epollFd, welcomeFrame)) {
-                closeConnection(conn.fd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
-                return;
-            }
-        } else {
-            pid = it->second;
+        string name = (root.contains("name") && root["name"].isString()) ? root["name"].asString() : ("Player " + to_string(pid));
+        double trackLen = (root.contains("trackLength") && root["trackLength"].isNumber()) ? root["trackLength"].asDouble() : 1500.0;
+        if (trackLen < 50.0) trackLen = 50.0;
+        string code, error;
+        uint32_t roomId = 0;
+        if (!roomManager.createRoom(pid, conn.fd, name, code, roomId, error)) {
+            string errFrame = WebSocketFrame::encodeTextFrame(RoomProtocol::makeError(error));
+            sendWebSocketFrameSafe(conn, epollFd, errFrame);
+            return;
         }
 
-        // Validate presence and types of required input fields
+        Room* room = roomManager.getRoom(roomId);
+        if (room) {
+            room->trackLength = trackLen;
+            PlayerEvent ev;
+            ev.type = PlayerEvent::Type::ROOM_JOIN;
+            ev.roomId = roomId;
+            ev.roomCode = code;
+            ev.playerId = pid;
+            ev.socketFd = conn.fd;
+            ev.connectionId = conn.id;
+            ev.playerName = name;
+            ev.lane = 0;
+            ev.trackLength = room->trackLength;
+            inputQueue.pushEvent(ev);
+
+            string createdMsg = WebSocketFrame::encodeTextFrame(RoomProtocol::makeRoomCreated(*room, pid));
+            sendWebSocketFrameSafe(conn, epollFd, createdMsg);
+        }
+    } else if (type == "join_room") {
+        uint32_t pid = getOrAdmitPlayer(conn, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, nextPlayerId, inputQueue, roomManager);
+        if (pid == 0) return;
+
+        if (!root.contains("code") || !root["code"].isString()) {
+            string errFrame = WebSocketFrame::encodeTextFrame(RoomProtocol::makeError("Missing room code"));
+            sendWebSocketFrameSafe(conn, epollFd, errFrame);
+            return;
+        }
+
+        string code = root["code"].asString();
+        string name = (root.contains("name") && root["name"].isString()) ? root["name"].asString() : ("Player " + to_string(pid));
+        string error;
+        uint32_t roomId = 0;
+        if (!roomManager.joinRoom(code, pid, conn.fd, name, roomId, error)) {
+            string errFrame = WebSocketFrame::encodeTextFrame(RoomProtocol::makeError(error));
+            sendWebSocketFrameSafe(conn, epollFd, errFrame);
+            return;
+        }
+
+        Room* room = roomManager.getRoom(roomId);
+        if (room) {
+            const auto& member = room->members[pid];
+            PlayerEvent ev;
+            ev.type = PlayerEvent::Type::ROOM_JOIN;
+            ev.roomId = roomId;
+            ev.roomCode = room->code;
+            ev.playerId = pid;
+            ev.socketFd = conn.fd;
+            ev.connectionId = conn.id;
+            ev.playerName = member.name;
+            ev.lane = member.lane;
+            ev.trackLength = room->trackLength;
+            inputQueue.pushEvent(ev);
+
+            string joinedMsg = WebSocketFrame::encodeTextFrame(RoomProtocol::makeRoomJoined(*room, pid));
+            sendWebSocketFrameSafe(conn, epollFd, joinedMsg);
+
+            string playerJoinedMsg = WebSocketFrame::encodeTextFrame(RoomProtocol::makePlayerJoined(*room, pid, member.name));
+            string roomUpdatedMsg = WebSocketFrame::encodeTextFrame(RoomProtocol::makeRoomUpdated(*room));
+            for (const auto& [mPid, m] : room->members) {
+                auto cIt = connections.find(m.socketFd);
+                if (cIt != connections.end() && cIt->second.protocol == ConnectionProtocol::WEBSOCKET) {
+                    sendWebSocketFrameSafe(cIt->second, epollFd, playerJoinedMsg);
+                    sendWebSocketFrameSafe(cIt->second, epollFd, roomUpdatedMsg);
+                }
+            }
+        }
+    } else if (type == "leave_room") {
+        auto it = socketToPlayer.find(conn.fd);
+        if (it == socketToPlayer.end()) {
+            string errFrame = WebSocketFrame::encodeTextFrame(RoomProtocol::makeError("Player is not in any room"));
+            sendWebSocketFrameSafe(conn, epollFd, errFrame);
+            return;
+        }
+        uint32_t pid = it->second;
+
+        uint32_t oldRoomId = 0;
+        bool roomDestroyed = false;
+        uint32_t newHostId = 0;
+        bool countdownCancelled = false;
+
+        if (!roomManager.leaveRoom(pid, oldRoomId, roomDestroyed, newHostId, countdownCancelled)) {
+            string errFrame = WebSocketFrame::encodeTextFrame(RoomProtocol::makeError("Player is not in any room"));
+            sendWebSocketFrameSafe(conn, epollFd, errFrame);
+            return;
+        }
+
+        json::Value leftRes(json::Type::OBJECT);
+        leftRes["type"] = "room_left";
+        leftRes["roomId"] = static_cast<int64_t>(oldRoomId);
+        string leftResFrame = WebSocketFrame::encodeTextFrame(leftRes.serialize());
+        sendWebSocketFrameSafe(conn, epollFd, leftResFrame);
+
+        if (roomDestroyed) {
+            PlayerEvent ev;
+            ev.type = PlayerEvent::Type::DESTROY_ROOM;
+            ev.roomId = oldRoomId;
+            inputQueue.pushEvent(ev);
+        } else {
+            Room* room = roomManager.getRoom(oldRoomId);
+            if (room) {
+                if (countdownCancelled) {
+                    PlayerEvent ev;
+                    ev.type = PlayerEvent::Type::CANCEL_COUNTDOWN;
+                    ev.roomId = oldRoomId;
+                    inputQueue.pushEvent(ev);
+                }
+                PlayerEvent evLeave;
+                evLeave.type = PlayerEvent::Type::ROOM_LEAVE;
+                evLeave.roomId = oldRoomId;
+                evLeave.playerId = pid;
+                inputQueue.pushEvent(evLeave);
+
+                string playerLeftMsg = WebSocketFrame::encodeTextFrame(RoomProtocol::makePlayerLeft(*room, pid, newHostId));
+                string roomUpdatedMsg = WebSocketFrame::encodeTextFrame(RoomProtocol::makeRoomUpdated(*room));
+                for (const auto& [mPid, m] : room->members) {
+                    auto cIt = connections.find(m.socketFd);
+                    if (cIt != connections.end() && cIt->second.protocol == ConnectionProtocol::WEBSOCKET) {
+                        sendWebSocketFrameSafe(cIt->second, epollFd, playerLeftMsg);
+                        sendWebSocketFrameSafe(cIt->second, epollFd, roomUpdatedMsg);
+                    }
+                }
+            }
+        }
+    } else if (type == "set_ready") {
+        auto it = socketToPlayer.find(conn.fd);
+        if (it == socketToPlayer.end()) {
+            string errFrame = WebSocketFrame::encodeTextFrame(RoomProtocol::makeError("Player is not in any room"));
+            sendWebSocketFrameSafe(conn, epollFd, errFrame);
+            return;
+        }
+        uint32_t pid = it->second;
+
+        bool ready = root.contains("ready") && root["ready"].asBool();
+        uint32_t roomId = 0;
+        bool countdownCancelled = false;
+        string error;
+        if (!roomManager.setReady(pid, ready, roomId, countdownCancelled, error)) {
+            string errFrame = WebSocketFrame::encodeTextFrame(RoomProtocol::makeError(error));
+            sendWebSocketFrameSafe(conn, epollFd, errFrame);
+            return;
+        }
+
+        Room* room = roomManager.getRoom(roomId);
+        if (room) {
+            if (countdownCancelled) {
+                PlayerEvent ev;
+                ev.type = PlayerEvent::Type::CANCEL_COUNTDOWN;
+                ev.roomId = roomId;
+                inputQueue.pushEvent(ev);
+            }
+
+            string readyMsg = WebSocketFrame::encodeTextFrame(RoomProtocol::makeReadyUpdated(*room, pid, ready));
+            string updatedMsg = WebSocketFrame::encodeTextFrame(RoomProtocol::makeRoomUpdated(*room));
+            for (const auto& [mPid, m] : room->members) {
+                auto cIt = connections.find(m.socketFd);
+                if (cIt != connections.end() && cIt->second.protocol == ConnectionProtocol::WEBSOCKET) {
+                    sendWebSocketFrameSafe(cIt->second, epollFd, readyMsg);
+                    sendWebSocketFrameSafe(cIt->second, epollFd, updatedMsg);
+                }
+            }
+        }
+    } else if (type == "start_race") {
+        auto it = socketToPlayer.find(conn.fd);
+        if (it == socketToPlayer.end()) {
+            string errFrame = WebSocketFrame::encodeTextFrame(RoomProtocol::makeError("Player is not in any room"));
+            sendWebSocketFrameSafe(conn, epollFd, errFrame);
+            return;
+        }
+        uint32_t pid = it->second;
+
+        uint32_t roomId = 0;
+        string error;
+        if (!roomManager.startRace(pid, roomId, error)) {
+            string errFrame = WebSocketFrame::encodeTextFrame(RoomProtocol::makeError(error));
+            sendWebSocketFrameSafe(conn, epollFd, errFrame);
+            return;
+        }
+
+        Room* room = roomManager.getRoom(roomId);
+        if (room) {
+            PlayerEvent ev;
+            ev.type = PlayerEvent::Type::START_COUNTDOWN;
+            ev.roomId = roomId;
+            ev.roomCode = room->code;
+            ev.trackLength = room->trackLength;
+            inputQueue.pushEvent(ev);
+
+            string countdownMsg = WebSocketFrame::encodeTextFrame(RoomProtocol::makeCountdown(*room, room->countdownSeconds));
+            string updatedMsg = WebSocketFrame::encodeTextFrame(RoomProtocol::makeRoomUpdated(*room));
+            for (const auto& [mPid, m] : room->members) {
+                auto cIt = connections.find(m.socketFd);
+                if (cIt != connections.end() && cIt->second.protocol == ConnectionProtocol::WEBSOCKET) {
+                    sendWebSocketFrameSafe(cIt->second, epollFd, countdownMsg);
+                    sendWebSocketFrameSafe(cIt->second, epollFd, updatedMsg);
+                }
+            }
+        }
+    } else if (type == "get_room_info") {
+        auto it = socketToPlayer.find(conn.fd);
+        if (it == socketToPlayer.end()) {
+            string errFrame = WebSocketFrame::encodeTextFrame(RoomProtocol::makeError("Player is not in any room"));
+            sendWebSocketFrameSafe(conn, epollFd, errFrame);
+            return;
+        }
+        uint32_t pid = it->second;
+        Room* room = roomManager.getRoomForPlayer(pid);
+        if (!room) {
+            string errFrame = WebSocketFrame::encodeTextFrame(RoomProtocol::makeError("Player is not in any room"));
+            sendWebSocketFrameSafe(conn, epollFd, errFrame);
+            return;
+        }
+        string updatedMsg = WebSocketFrame::encodeTextFrame(RoomProtocol::makeRoomUpdated(*room));
+        sendWebSocketFrameSafe(conn, epollFd, updatedMsg);
+    } else if (type == "input") {
+        uint32_t pid = getOrAdmitPlayer(conn, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, nextPlayerId, inputQueue, roomManager);
+        if (pid == 0) return;
+
+        uint32_t roomId = roomManager.getPlayerRoomId(pid);
+        if (roomId != 0) {
+            Room* room = roomManager.getRoom(roomId);
+            if (!room || (room->state != RoomState::RACING && room->state != RoomState::COUNTDOWN)) {
+                return;
+            }
+        }
+
         if (!root.contains("seq") || !root["seq"].isNumber()) return;
         if (!root.contains("controls") || !root["controls"].isObject()) return;
 
@@ -262,23 +563,21 @@ static void handleWebSocketTextMessage(Connection& conn,
         uint64_t seq = static_cast<uint64_t>(root["seq"].asInt());
         uint64_t lastSeq = playerLastSeq[pid];
         if (seq <= lastSeq) {
-            // Drop stale or repeated sequence number safely
             return;
         }
 
-        // Rate limiting: prevent input packet spam (maximum ~160 inputs/s)
         auto now = std::chrono::steady_clock::now();
         auto lastTime = playerLastTime[pid];
         auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastTime).count();
         if (elapsedMs < 6) {
-            return; // Drop excessive input packets
+            return;
         }
 
         playerLastSeq[pid] = seq;
         playerLastTime[pid] = now;
 
-        // Construct validated input (ignoring any client-supplied position/speed)
         PlayerInput in;
+        in.roomId = roomId;
         in.playerId = pid;
         in.seq = seq;
         in.controls.up = cObj["up"].asBool();
@@ -288,18 +587,14 @@ static void handleWebSocketTextMessage(Connection& conn,
 
         inputQueue.pushInput(in);
     } else if (type == "telemetry") {
-        // Backwards compatibility for Phase 3 telemetry tests
         string echo = WebSocketFrame::encodeTextFrame(payload);
         if (!sendWebSocketFrameSafe(conn, epollFd, echo)) {
-            closeConnection(conn.fd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
-            return;
+            closeConnection(conn.fd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
         }
     } else {
-        // Generic JSON echo for other tests
         string echo = WebSocketFrame::encodeTextFrame(payload);
         if (!sendWebSocketFrameSafe(conn, epollFd, echo)) {
-            closeConnection(conn.fd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
-            return;
+            closeConnection(conn.fd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
         }
     }
 }
@@ -321,8 +616,9 @@ int main() {
     InputQueue inputQueue;
     SnapshotQueue snapshotQueue;
     SimulationThread simulationThread(inputQueue, snapshotQueue);
+    RoomManager roomManager;
 
-    router.addRoute("/metrics", [&simulationThread]() -> HttpResponse {
+    router.addRoute("/metrics", [&simulationThread, &roomManager]() -> HttpResponse {
         HttpResponse res;
         res.status = 200;
         res.contentType = "application/json";
@@ -333,6 +629,7 @@ int main() {
             << "\"tickRate\":" << std::fixed << std::setprecision(2) << simulationThread.getTickRate() << ","
             << "\"snapshotRate\":" << std::fixed << std::setprecision(2) << simulationThread.getSnapshotRate() << ","
             << "\"activePlayers\":" << simulationThread.getPlayerCount() << ","
+            << "\"roomCount\":" << roomManager.getRoomCount() << ","
             << "\"totalSnapshotsPublished\":" << simulationThread.getTotalSnapshots() << ","
             << "\"inputQueueLifecycleSize\":" << simulationThread.getInputQueue().getLifecycleQueueSize() << ","
             << "\"inputQueueHighWaterEvents\":" << simulationThread.getInputQueue().getHighWaterEvents() << ","
@@ -495,13 +792,13 @@ int main() {
 
                     bool sockErr = flushSendBuffer(conn);
                     if (sockErr) {
-                        closeConnection(conn.fd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+                        closeConnection(conn.fd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
                         continue;
                     }
 
                     if (conn.bytesSent >= conn.outBuffer.size()) {
                         if (conn.shouldClose) {
-                            closeConnection(conn.fd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+                            closeConnection(conn.fd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
                         } else {
                             conn.resetForNextRequest();
                             epoll_event ev{};
@@ -522,57 +819,117 @@ int main() {
                 uint64_t counter = 0;
                 while (read(snapshotWakeupFd, &counter, sizeof(counter)) > 0) {}
 
-                WorldSnapshot latestSnap;
-                if (snapshotQueue.popLatest(latestSnap)) {
-                    string jsonStr = latestSnap.toJson();
+                auto snapshots = snapshotQueue.popLatestPerRoom();
+                vector<int> slowClientsToDisconnect;
+
+                for (const auto& snap : snapshots) {
+                    string jsonStr = snap.toJson();
                     string frame = WebSocketFrame::encodeTextFrame(jsonStr);
 
-                    vector<int> slowClientsToDisconnect;
+                    if (snap.roomId == 0) {
+                        for (const auto& [pid, sockFd] : playerToSocket) {
+                            if (roomManager.getPlayerRoomId(pid) == 0) {
+                                auto cIt = connections.find(sockFd);
+                                if (cIt != connections.end() && cIt->second.protocol == ConnectionProtocol::WEBSOCKET) {
+                                    Connection& playerConn = cIt->second;
 
-                    for (const auto& [pid, sockFd] : playerToSocket) {
-                        auto cIt = connections.find(sockFd);
-                        if (cIt != connections.end() && cIt->second.protocol == ConnectionProtocol::WEBSOCKET) {
-                            Connection& playerConn = cIt->second;
+                                    bool socketBlocked = (playerConn.bytesSent < playerConn.outBuffer.size());
+                                    bool bufferTooLarge = (playerConn.outBuffer.size() >= Connection::SNAPSHOT_BACKPRESSURE_THRESHOLD);
 
-                            // Backpressure check:
-                            // If socket is blocked (pending unsent data) or buffer exceeds 64 KB:
-                            bool socketBlocked = (playerConn.bytesSent < playerConn.outBuffer.size());
-                            bool bufferTooLarge = (playerConn.outBuffer.size() >= Connection::SNAPSHOT_BACKPRESSURE_THRESHOLD);
+                                    if (socketBlocked || bufferTooLarge) {
+                                        playerConn.consecutiveDroppedSnapshots++;
+                                        if (playerConn.consecutiveDroppedSnapshots >= Connection::MAX_CONSECUTIVE_DROPPED_SNAPSHOTS) {
+                                            slowClientsToDisconnect.push_back(sockFd);
+                                        }
+                                        continue;
+                                    }
 
-                            if (socketBlocked || bufferTooLarge) {
-                                playerConn.consecutiveDroppedSnapshots++;
-                                if (playerConn.consecutiveDroppedSnapshots >= Connection::MAX_CONSECUTIVE_DROPPED_SNAPSHOTS) {
-                                    // Client stalled for >= 50 consecutive snapshots (~2.5s)
-                                    slowClientsToDisconnect.push_back(sockFd);
+                                    playerConn.consecutiveDroppedSnapshots = 0;
+                                    playerConn.outBuffer.append(frame);
+                                    bool sockErr = flushSendBuffer(playerConn);
+                                    if (sockErr) {
+                                        slowClientsToDisconnect.push_back(sockFd);
+                                        continue;
+                                    }
+
+                                    if (playerConn.bytesSent >= playerConn.outBuffer.size()) {
+                                        playerConn.outBuffer.clear();
+                                        playerConn.bytesSent = 0;
+                                    } else {
+                                        epoll_event ev{};
+                                        ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
+                                        ev.data.fd = sockFd;
+                                        epoll_ctl(epollFd, EPOLL_CTL_MOD, sockFd, &ev);
+                                    }
                                 }
-                                // Drop this snapshot for this client to prevent queuing stale state
-                                continue;
                             }
+                        }
+                    } else {
+                        Room* room = roomManager.getRoom(snap.roomId);
+                        if (!room) continue;
 
-                            // Socket write buffer is clear: reset consecutive dropped snapshots counter
-                            playerConn.consecutiveDroppedSnapshots = 0;
-                            playerConn.outBuffer.append(frame);
-                            bool sockErr = flushSendBuffer(playerConn);
-                            if (sockErr) {
-                                slowClientsToDisconnect.push_back(sockFd);
-                                continue;
+                        if (room->state == RoomState::COUNTDOWN && snap.roomState == RoomState::RACING) {
+                            room->state = RoomState::RACING;
+                            string startedMsg = WebSocketFrame::encodeTextFrame(RoomProtocol::makeRaceStarted(*room));
+                            for (const auto& [pid, m] : room->members) {
+                                auto cIt = connections.find(m.socketFd);
+                                if (cIt != connections.end() && cIt->second.protocol == ConnectionProtocol::WEBSOCKET) {
+                                    sendWebSocketFrameSafe(cIt->second, epollFd, startedMsg);
+                                }
                             }
+                        } else if (room->state == RoomState::RACING && snap.roomState == RoomState::FINISHED) {
+                            room->state = RoomState::FINISHED;
+                            room->results = snap.results;
+                            string finishedMsg = WebSocketFrame::encodeTextFrame(RoomProtocol::makeRaceFinished(*room));
+                            for (const auto& [pid, m] : room->members) {
+                                auto cIt = connections.find(m.socketFd);
+                                if (cIt != connections.end() && cIt->second.protocol == ConnectionProtocol::WEBSOCKET) {
+                                    sendWebSocketFrameSafe(cIt->second, epollFd, finishedMsg);
+                                }
+                            }
+                        }
 
-                            if (playerConn.bytesSent >= playerConn.outBuffer.size()) {
-                                playerConn.outBuffer.clear();
-                                playerConn.bytesSent = 0;
-                            } else {
-                                epoll_event ev{};
-                                ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
-                                ev.data.fd = sockFd;
-                                epoll_ctl(epollFd, EPOLL_CTL_MOD, sockFd, &ev);
+                        for (const auto& [pid, member] : room->members) {
+                            int sockFd = member.socketFd;
+                            auto cIt = connections.find(sockFd);
+                            if (cIt != connections.end() && cIt->second.protocol == ConnectionProtocol::WEBSOCKET) {
+                                Connection& playerConn = cIt->second;
+
+                                bool socketBlocked = (playerConn.bytesSent < playerConn.outBuffer.size());
+                                bool bufferTooLarge = (playerConn.outBuffer.size() >= Connection::SNAPSHOT_BACKPRESSURE_THRESHOLD);
+
+                                if (socketBlocked || bufferTooLarge) {
+                                    playerConn.consecutiveDroppedSnapshots++;
+                                    if (playerConn.consecutiveDroppedSnapshots >= Connection::MAX_CONSECUTIVE_DROPPED_SNAPSHOTS) {
+                                        slowClientsToDisconnect.push_back(sockFd);
+                                    }
+                                    continue;
+                                }
+
+                                playerConn.consecutiveDroppedSnapshots = 0;
+                                playerConn.outBuffer.append(frame);
+                                bool sockErr = flushSendBuffer(playerConn);
+                                if (sockErr) {
+                                    slowClientsToDisconnect.push_back(sockFd);
+                                    continue;
+                                }
+
+                                if (playerConn.bytesSent >= playerConn.outBuffer.size()) {
+                                    playerConn.outBuffer.clear();
+                                    playerConn.bytesSent = 0;
+                                } else {
+                                    epoll_event ev{};
+                                    ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
+                                    ev.data.fd = sockFd;
+                                    epoll_ctl(epollFd, EPOLL_CTL_MOD, sockFd, &ev);
+                                }
                             }
                         }
                     }
+                }
 
-                    for (int sfd : slowClientsToDisconnect) {
-                        closeConnection(sfd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
-                    }
+                for (int sfd : slowClientsToDisconnect) {
+                    closeConnection(sfd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
                 }
             }
             // 3. Incoming connection on server socket
@@ -623,7 +980,7 @@ int main() {
                 // Handle peer hangup or errors
                 if (currentEvents & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
                     if (conn.bytesSent >= conn.outBuffer.size()) {
-                        closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+                        closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
                         continue;
                     }
                 }
@@ -633,7 +990,7 @@ int main() {
                     if (conn.bytesSent < conn.outBuffer.size()) {
                         bool sockErr = flushSendBuffer(conn);
                         if (sockErr) {
-                            closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+                            closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
                             continue;
                         }
 
@@ -642,7 +999,7 @@ int main() {
                             conn.bytesSent = 0;
 
                             if (conn.shouldClose) {
-                                closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+                                closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
                                 continue;
                             } else {
                                 epoll_event ev{};
@@ -686,7 +1043,7 @@ int main() {
                     }
 
                     if (disconnected) {
-                        closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+                        closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
                         continue;
                     }
 
@@ -714,7 +1071,7 @@ int main() {
 
                                     bool sockErr = flushSendBuffer(conn);
                                     if (sockErr) {
-                                        closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+                                        closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
                                         continue;
                                     }
 
@@ -739,7 +1096,7 @@ int main() {
 
                                     flushSendBuffer(conn);
                                     if (conn.bytesSent >= conn.outBuffer.size()) {
-                                        closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+                                        closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
                                     } else {
                                         epoll_event ev{};
                                         ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
@@ -764,11 +1121,11 @@ int main() {
                             }
                         } else if (parseResult == Connection::ParseResult::TOO_LARGE) {
                             sendImmediateError(clientSocketFd, 431, "Request Header Fields Too Large");
-                            closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+                            closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
                             continue;
                         } else if (parseResult == Connection::ParseResult::BAD_REQUEST) {
                             sendImmediateError(clientSocketFd, 400, "Bad Request");
-                            closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+                            closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
                             continue;
                         }
                     }
@@ -794,7 +1151,7 @@ int main() {
                                 flushSendBuffer(conn);
 
                                 if (conn.bytesSent >= conn.outBuffer.size()) {
-                                    closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+                                    closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
                                 } else {
                                     epoll_event ev{};
                                     ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
@@ -811,7 +1168,7 @@ int main() {
                             if (frame.opcode == WebSocketFrame::OPCODE_PING) {
                                 string pong = WebSocketFrame::encodePongFrame(frame.payload);
                                 if (!sendWebSocketFrameSafe(conn, epollFd, pong, Connection::MAX_CONGESTED_CONTROL_BUFFER)) {
-                                    closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+                                    closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
                                     connectionClosed = true;
                                     break;
                                 }
@@ -831,7 +1188,7 @@ int main() {
                                 flushSendBuffer(conn);
 
                                 if (conn.bytesSent >= conn.outBuffer.size()) {
-                                    closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+                                    closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
                                 } else {
                                     epoll_event ev{};
                                     ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
@@ -851,7 +1208,7 @@ int main() {
                                     flushSendBuffer(conn);
 
                                     if (conn.bytesSent >= conn.outBuffer.size()) {
-                                        closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+                                        closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
                                     } else {
                                         epoll_event ev{};
                                         ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
@@ -875,7 +1232,7 @@ int main() {
                                         flushSendBuffer(conn);
 
                                         if (conn.bytesSent >= conn.outBuffer.size()) {
-                                            closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+                                            closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
                                         } else {
                                             epoll_event ev{};
                                             ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
@@ -887,7 +1244,7 @@ int main() {
                                     }
 
                                     // Route through message handler
-                                    handleWebSocketTextMessage(conn, epollFd, frame.payload, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, nextPlayerId, inputQueue);
+                                    handleWebSocketTextMessage(conn, epollFd, frame.payload, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, nextPlayerId, inputQueue, roomManager);
                                 }
                             }
                             // Data Frames: Continuation
@@ -900,7 +1257,7 @@ int main() {
                                     flushSendBuffer(conn);
 
                                     if (conn.bytesSent >= conn.outBuffer.size()) {
-                                        closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+                                        closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
                                     } else {
                                         epoll_event ev{};
                                         ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
@@ -919,7 +1276,7 @@ int main() {
                                     flushSendBuffer(conn);
 
                                     if (conn.bytesSent >= conn.outBuffer.size()) {
-                                        closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+                                        closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
                                     } else {
                                         epoll_event ev{};
                                         ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
@@ -942,7 +1299,7 @@ int main() {
                                             flushSendBuffer(conn);
 
                                             if (conn.bytesSent >= conn.outBuffer.size()) {
-                                                closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+                                                closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
                                             } else {
                                                 epoll_event ev{};
                                                 ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
@@ -953,11 +1310,11 @@ int main() {
                                             break;
                                         }
 
-                                        handleWebSocketTextMessage(conn, epollFd, conn.wsMessageBuffer, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, nextPlayerId, inputQueue);
+                                        handleWebSocketTextMessage(conn, epollFd, conn.wsMessageBuffer, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, nextPlayerId, inputQueue, roomManager);
                                     } else if (conn.wsFragmentedOpcode == WebSocketFrame::OPCODE_BINARY) {
                                         string echoFrame = WebSocketFrame::encodeFrame(WebSocketFrame::OPCODE_BINARY, conn.wsMessageBuffer, true);
                                         if (!sendWebSocketFrameSafe(conn, epollFd, echoFrame)) {
-                                            closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+                                            closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
                                             connectionClosed = true;
                                             break;
                                         }
@@ -976,7 +1333,7 @@ int main() {
                                     flushSendBuffer(conn);
 
                                     if (conn.bytesSent >= conn.outBuffer.size()) {
-                                        closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+                                        closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
                                     } else {
                                         epoll_event ev{};
                                         ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
@@ -994,7 +1351,7 @@ int main() {
                                 } else {
                                     string echoFrame = WebSocketFrame::encodeFrame(WebSocketFrame::OPCODE_BINARY, frame.payload, true);
                                     if (!sendWebSocketFrameSafe(conn, epollFd, echoFrame)) {
-                                        closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+                                        closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
                                         connectionClosed = true;
                                         break;
                                     }
