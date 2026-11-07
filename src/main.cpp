@@ -93,7 +93,7 @@ static void removePlayerIfPresent(int fd,
         PlayerEvent ev;
         ev.type = PlayerEvent::Type::LEAVE;
         ev.playerId = pid;
-        inputQueue.pushEvent(ev);
+        inputQueue.pushLeave(ev);
     }
 }
 
@@ -150,9 +150,13 @@ static bool flushSendBuffer(Connection& conn) {
     return false;
 }
 
-// Safely buffers and flushes an outgoing WebSocket frame, resetting outBuffer when fully written
-// or registering EPOLLOUT if write blocked. Returns true on success/EAGAIN, false on fatal socket error.
-static bool sendWebSocketFrameSafe(Connection& conn, int epollFd, const string& frame) {
+// Safely buffers and flushes an outgoing WebSocket frame, enforcing a strict maximum buffer limit.
+// Resets outBuffer when fully written or registers EPOLLOUT if write blocked.
+// Returns true on success/EAGAIN, false on fatal socket error or memory limit violation.
+static bool sendWebSocketFrameSafe(Connection& conn, int epollFd, const string& frame, size_t maxBufferSize = Connection::MAX_OUT_BUFFER_SIZE) {
+    if (conn.outBuffer.size() + frame.size() > maxBufferSize) {
+        return false;
+    }
     conn.outBuffer.append(frame);
     bool sockErr = flushSendBuffer(conn);
     if (sockErr) {
@@ -174,6 +178,7 @@ static bool sendWebSocketFrameSafe(Connection& conn, int epollFd, const string& 
 static void handleWebSocketTextMessage(Connection& conn,
                                        int epollFd,
                                        const string& payload,
+                                       unordered_map<int, Connection>& connections,
                                        unordered_map<int, uint32_t>& socketToPlayer,
                                        unordered_map<uint32_t, int>& playerToSocket,
                                        unordered_map<uint32_t, uint64_t>& playerLastSeq,
@@ -190,7 +195,10 @@ static void handleWebSocketTextMessage(Connection& conn,
         }
         // Plain text: echo back for backwards compatibility with Phase 2 echo tests
         string echo = WebSocketFrame::encodeTextFrame(payload);
-        sendWebSocketFrameSafe(conn, epollFd, echo);
+        if (!sendWebSocketFrameSafe(conn, epollFd, echo)) {
+            closeConnection(conn.fd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+            return;
+        }
         return;
     }
 
@@ -200,26 +208,43 @@ static void handleWebSocketTextMessage(Connection& conn,
         uint32_t pid = 0;
         auto it = socketToPlayer.find(conn.fd);
         if (it == socketToPlayer.end()) {
-            // First input message from this client: register as an active player
+            // First input message from this client: attempt to admit as active player
+            PlayerEvent ev;
+            ev.type = PlayerEvent::Type::JOIN;
+            ev.playerId = nextPlayerId;
+            ev.socketFd = conn.fd;
+            ev.connectionId = conn.id;
+
+            if (!inputQueue.pushJoin(ev)) {
+                // Lifecycle admission capacity exhausted or max active players reached!
+                // Reject join cleanly with 1013 Try Again Later
+                json::Value errObj(json::Type::OBJECT);
+                errObj["type"] = "error";
+                errObj["message"] = "Server player capacity reached; please retry later";
+                string errFrame = WebSocketFrame::encodeTextFrame(errObj.serialize());
+                sendWebSocketFrameSafe(conn, epollFd, errFrame);
+
+                string closeFrame = WebSocketFrame::encodeCloseFrame(1013, "Try Again Later");
+                sendWebSocketFrameSafe(conn, epollFd, closeFrame);
+                conn.shouldClose = true;
+                return;
+            }
+
             pid = nextPlayerId++;
             socketToPlayer[conn.fd] = pid;
             playerToSocket[pid] = conn.fd;
             playerLastSeq[pid] = 0;
             playerLastTime[pid] = std::chrono::steady_clock::now();
 
-            PlayerEvent ev;
-            ev.type = PlayerEvent::Type::JOIN;
-            ev.playerId = pid;
-            ev.socketFd = conn.fd;
-            ev.connectionId = conn.id;
-            inputQueue.pushEvent(ev);
-
             // Send authoritative welcome message with assigned playerId
             json::Value welcome(json::Type::OBJECT);
             welcome["type"] = "welcome";
             welcome["playerId"] = static_cast<int64_t>(pid);
             string welcomeFrame = WebSocketFrame::encodeTextFrame(welcome.serialize());
-            sendWebSocketFrameSafe(conn, epollFd, welcomeFrame);
+            if (!sendWebSocketFrameSafe(conn, epollFd, welcomeFrame)) {
+                closeConnection(conn.fd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+                return;
+            }
         } else {
             pid = it->second;
         }
@@ -265,11 +290,17 @@ static void handleWebSocketTextMessage(Connection& conn,
     } else if (type == "telemetry") {
         // Backwards compatibility for Phase 3 telemetry tests
         string echo = WebSocketFrame::encodeTextFrame(payload);
-        sendWebSocketFrameSafe(conn, epollFd, echo);
+        if (!sendWebSocketFrameSafe(conn, epollFd, echo)) {
+            closeConnection(conn.fd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+            return;
+        }
     } else {
         // Generic JSON echo for other tests
         string echo = WebSocketFrame::encodeTextFrame(payload);
-        sendWebSocketFrameSafe(conn, epollFd, echo);
+        if (!sendWebSocketFrameSafe(conn, epollFd, echo)) {
+            closeConnection(conn.fd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+            return;
+        }
     }
 }
 
@@ -303,8 +334,13 @@ int main() {
             << "\"snapshotRate\":" << std::fixed << std::setprecision(2) << simulationThread.getSnapshotRate() << ","
             << "\"activePlayers\":" << simulationThread.getPlayerCount() << ","
             << "\"totalSnapshotsPublished\":" << simulationThread.getTotalSnapshots() << ","
+            << "\"inputQueueLifecycleSize\":" << simulationThread.getInputQueue().getLifecycleQueueSize() << ","
             << "\"inputQueueHighWaterEvents\":" << simulationThread.getInputQueue().getHighWaterEvents() << ","
             << "\"inputQueueHighWaterInputs\":" << simulationThread.getInputQueue().getHighWaterInputs() << ","
+            << "\"totalJoinsAttempted\":" << simulationThread.getInputQueue().getTotalJoinsAttempted() << ","
+            << "\"totalJoinsAdmitted\":" << simulationThread.getInputQueue().getTotalJoinsAdmitted() << ","
+            << "\"totalJoinsRejected\":" << simulationThread.getInputQueue().getTotalJoinsRejected() << ","
+            << "\"totalLeavesPushed\":" << simulationThread.getInputQueue().getTotalLeavesPushed() << ","
             << "\"snapshotQueueHighWater\":" << simulationThread.getSnapshotQueue().getHighWaterMark() << ","
             << "\"snapshotQueueTotalDropped\":" << simulationThread.getSnapshotQueue().getTotalDropped()
             << "}";
@@ -501,7 +537,7 @@ int main() {
                             // Backpressure check:
                             // If socket is blocked (pending unsent data) or buffer exceeds 64 KB:
                             bool socketBlocked = (playerConn.bytesSent < playerConn.outBuffer.size());
-                            bool bufferTooLarge = (playerConn.outBuffer.size() >= Connection::MAX_OUT_BUFFER_SIZE);
+                            bool bufferTooLarge = (playerConn.outBuffer.size() >= Connection::SNAPSHOT_BACKPRESSURE_THRESHOLD);
 
                             if (socketBlocked || bufferTooLarge) {
                                 playerConn.consecutiveDroppedSnapshots++;
@@ -774,8 +810,11 @@ int main() {
                             // Control Frames
                             if (frame.opcode == WebSocketFrame::OPCODE_PING) {
                                 string pong = WebSocketFrame::encodePongFrame(frame.payload);
-                                conn.outBuffer.append(pong);
-                                flushSendBuffer(conn);
+                                if (!sendWebSocketFrameSafe(conn, epollFd, pong, Connection::MAX_CONGESTED_CONTROL_BUFFER)) {
+                                    closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+                                    connectionClosed = true;
+                                    break;
+                                }
                             } else if (frame.opcode == WebSocketFrame::OPCODE_PONG) {
                                 // Ignore
                             } else if (frame.opcode == WebSocketFrame::OPCODE_CLOSE) {
@@ -784,7 +823,9 @@ int main() {
                                     conn.wsCloseSent = true;
                                     uint16_t respCode = (frame.closeCode != 0) ? frame.closeCode : WebSocketFrame::CLOSE_NORMAL;
                                     string closeResponse = WebSocketFrame::encodeCloseFrame(respCode, "");
-                                    conn.outBuffer.append(closeResponse);
+                                    if (conn.outBuffer.size() + closeResponse.size() <= Connection::MAX_OUT_BUFFER_SIZE) {
+                                        conn.outBuffer.append(closeResponse);
+                                    }
                                 }
                                 conn.shouldClose = true;
                                 flushSendBuffer(conn);
@@ -846,7 +887,7 @@ int main() {
                                     }
 
                                     // Route through message handler
-                                    handleWebSocketTextMessage(conn, epollFd, frame.payload, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, nextPlayerId, inputQueue);
+                                    handleWebSocketTextMessage(conn, epollFd, frame.payload, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, nextPlayerId, inputQueue);
                                 }
                             }
                             // Data Frames: Continuation
@@ -912,11 +953,14 @@ int main() {
                                             break;
                                         }
 
-                                        handleWebSocketTextMessage(conn, epollFd, conn.wsMessageBuffer, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, nextPlayerId, inputQueue);
+                                        handleWebSocketTextMessage(conn, epollFd, conn.wsMessageBuffer, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, nextPlayerId, inputQueue);
                                     } else if (conn.wsFragmentedOpcode == WebSocketFrame::OPCODE_BINARY) {
                                         string echoFrame = WebSocketFrame::encodeFrame(WebSocketFrame::OPCODE_BINARY, conn.wsMessageBuffer, true);
-                                        conn.outBuffer.append(echoFrame);
-                                        flushSendBuffer(conn);
+                                        if (!sendWebSocketFrameSafe(conn, epollFd, echoFrame)) {
+                                            closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+                                            connectionClosed = true;
+                                            break;
+                                        }
                                     }
                                     conn.wsMessageBuffer.clear();
                                     conn.wsFragmentedOpcode = 0;
@@ -949,8 +993,11 @@ int main() {
                                     conn.wsMessageBuffer = frame.payload;
                                 } else {
                                     string echoFrame = WebSocketFrame::encodeFrame(WebSocketFrame::OPCODE_BINARY, frame.payload, true);
-                                    conn.outBuffer.append(echoFrame);
-                                    flushSendBuffer(conn);
+                                    if (!sendWebSocketFrameSafe(conn, epollFd, echoFrame)) {
+                                        closeConnection(clientSocketFd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
+                                        connectionClosed = true;
+                                        break;
+                                    }
                                 }
                             }
                         }
