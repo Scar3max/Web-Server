@@ -23,6 +23,7 @@ add_executable(server
     src/Physics.cpp
     src/SnapshotQueue.cpp
     src/SimulationThread.cpp
+    src/RoomManager.cpp
 )
 
 target_link_libraries(server ${CMAKE_DL_LIBS})
@@ -44,6 +45,7 @@ add_executable(server_tsan
     src/Physics.cpp
     src/SnapshotQueue.cpp
     src/SimulationThread.cpp
+    src/RoomManager.cpp
 )
 target_compile_options(server_tsan PRIVATE -fsanitize=thread -g -O1)
 target_link_options(server_tsan PRIVATE -fsanitize=thread)
