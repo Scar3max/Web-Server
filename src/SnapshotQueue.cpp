@@ -22,6 +22,9 @@ std::string WorldSnapshot::toJson() const {
             << ",\"distance\":" << std::fixed << std::setprecision(2) << p.distance
             << ",\"speed\":" << std::fixed << std::setprecision(2) << p.speed
             << ",\"steer\":" << std::fixed << std::setprecision(4) << p.steer
+            << ",\"worldX\":" << std::fixed << std::setprecision(2) << p.worldX
+            << ",\"worldY\":" << std::fixed << std::setprecision(2) << p.worldY
+            << ",\"heading\":" << std::fixed << std::setprecision(4) << p.heading
             << "}";
     }
     oss << "],\"results\":[";

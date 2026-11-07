@@ -24,6 +24,7 @@ add_executable(server
     src/SnapshotQueue.cpp
     src/SimulationThread.cpp
     src/RoomManager.cpp
+    src/Track.cpp
 )
 
 target_link_libraries(server ${CMAKE_DL_LIBS})
@@ -46,6 +47,7 @@ add_executable(server_tsan
     src/SnapshotQueue.cpp
     src/SimulationThread.cpp
     src/RoomManager.cpp
+    src/Track.cpp
 )
 target_compile_options(server_tsan PRIVATE -fsanitize=thread -g -O1)
 target_link_options(server_tsan PRIVATE -fsanitize=thread)
@@ -69,6 +71,7 @@ add_executable(server_asan
     src/SnapshotQueue.cpp
     src/SimulationThread.cpp
     src/RoomManager.cpp
+    src/Track.cpp
 )
 target_compile_options(server_asan PRIVATE -fsanitize=address,undefined -g -O1)
 target_link_options(server_asan PRIVATE -fsanitize=address,undefined)

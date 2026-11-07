@@ -14,6 +14,9 @@ struct PlayerSnapshot {
     double distance = 0.0;
     double speed = 0.0;
     double steer = 0.0;
+    double worldX = 0.0;
+    double worldY = 0.0;
+    double heading = 0.0;
 };
 
 struct WorldSnapshot {
