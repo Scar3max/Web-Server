@@ -1,3 +1,0 @@
-/mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/build/CMakeFiles/server.dir
-/mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/build/CMakeFiles/edit_cache.dir
-/mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/build/CMakeFiles/rebuild_cache.dir
