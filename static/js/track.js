@@ -71,13 +71,30 @@ export class Track {
         const numSegments = this.isClosed ? numPoints : (numPoints - 1);
         let prevPos = this.controlPoints[0];
 
-        // Initial sample at s = 0
+        // Initial sample at s = 0 (closed-loop Catmull-Rom C1 continuous tangent at s = 0)
         let initialTan = { x: 0.0, y: 1.0 };
         if (numPoints >= 2) {
-            const dx = this.controlPoints[1].x - this.controlPoints[0].x;
-            const dy = this.controlPoints[1].y - this.controlPoints[0].y;
-            const len = Math.hypot(dx, dy) || 1.0;
-            initialTan = { x: dx / len, y: dy / len };
+            if (this.isClosed && numPoints >= 3) {
+                const idx0 = numPoints - 1;
+                const idx1 = 0;
+                const idx2 = 1;
+                const idx3 = 2 % numPoints;
+                const d = Track.evaluateCatmullRomDerivative(
+                    this.controlPoints[idx0], this.controlPoints[idx1],
+                    this.controlPoints[idx2], this.controlPoints[idx3], 0.0
+                );
+                const dLen = Math.hypot(d.x, d.y);
+                if (dLen > 1e-6) {
+                    initialTan = { x: d.x / dLen, y: d.y / dLen };
+                }
+            } else {
+                const dx = this.controlPoints[1].x - this.controlPoints[0].x;
+                const dy = this.controlPoints[1].y - this.controlPoints[0].y;
+                const len = Math.hypot(dx, dy);
+                if (len > 1e-6) {
+                    initialTan = { x: dx / len, y: dy / len };
+                }
+            }
         }
         const initialNorm = { x: initialTan.y, y: -initialTan.x };
         this.samples.push({
@@ -152,12 +169,12 @@ export class Track {
             s = Math.max(0.0, Math.min(s, this.totalLength));
         }
 
-        // Binary search for interval
+        // Binary search for upper_bound (first sample with distance > s)
         let low = 0;
-        let high = this.samples.length - 1;
+        let high = this.samples.length;
         while (low < high) {
             const mid = (low + high) >> 1;
-            if (this.samples[mid].distance < s) {
+            if (this.samples[mid].distance <= s) {
                 low = mid + 1;
             } else {
                 high = mid;
@@ -166,6 +183,10 @@ export class Track {
 
         if (low === 0) {
             const sp = this.samples[0];
+            return { center: sp.position, tangent: sp.tangent, normal: sp.normal, angle: sp.angle, distance: s, curvature: 0 };
+        }
+        if (low >= this.samples.length) {
+            const sp = this.samples[this.samples.length - 1];
             return { center: sp.position, tangent: sp.tangent, normal: sp.normal, angle: sp.angle, distance: s, curvature: 0 };
         }
 

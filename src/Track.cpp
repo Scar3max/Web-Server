@@ -79,10 +79,27 @@ void Track::buildArcLengthTable(size_t samplesPerSegment) {
     size_t numSegments = isClosed ? numPoints : (numPoints - 1);
     Vector2D prevPos = controlPoints[0];
 
-    // First sample at distance 0
+    // First sample at distance 0 (closed-loop Catmull-Rom C1 continuous tangent at s = 0)
     Vector2D initialTan(0.0, 1.0);
     if (numPoints >= 2) {
-        initialTan = (controlPoints[1] - controlPoints[0]).normalized();
+        if (isClosed && numPoints >= 3) {
+            size_t idx0 = numPoints - 1;
+            size_t idx1 = 0;
+            size_t idx2 = 1;
+            size_t idx3 = 2 % numPoints;
+            Vector2D deriv = evaluateCatmullRomDerivative(controlPoints[idx0], controlPoints[idx1],
+                                                          controlPoints[idx2], controlPoints[idx3], 0.0);
+            double dLen = deriv.length();
+            if (dLen > 1e-6) {
+                initialTan = deriv * (1.0 / dLen);
+            }
+        } else {
+            Vector2D diff = controlPoints[1] - controlPoints[0];
+            double dLen = diff.length();
+            if (dLen > 1e-6) {
+                initialTan = diff * (1.0 / dLen);
+            }
+        }
     }
     Vector2D initialNorm(initialTan.y, -initialTan.x);
     samples.push_back({0.0, prevPos, initialTan, initialNorm, std::atan2(initialTan.y, initialTan.x)});
