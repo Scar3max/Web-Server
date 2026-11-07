@@ -39,14 +39,11 @@
 #include "RoomProtocol.h"
 #include "ServerMetrics.h"
 #include "BinarySnapshot.h"
+#include "Config.h"
 
 using namespace std;
 
-constexpr int SERVER_PORT       = 8080;
-constexpr int THREAD_POOL_SIZE  = 8;
 constexpr int RECV_BUFFER_SIZE  = 4096;
-constexpr int MAX_EPOLL_EVENTS  = 64;
-constexpr int LISTEN_BACKLOG    = 128;
 
 static volatile sig_atomic_t g_running = 1;
 
@@ -55,20 +52,38 @@ static void handleSignal(int sig) {
     g_running = 0;
 }
 
-static string HomeHandler() {
-    string content = FileManager::readFile("../static/index.html");
-    if (content.empty()) {
-        content = FileManager::readFile("static/index.html");
+static string sanitizePlayerName(const string& raw, uint32_t pid) {
+    string cleaned;
+    cleaned.reserve(raw.size());
+    for (char c : raw) {
+        if (static_cast<unsigned char>(c) >= 32 && static_cast<unsigned char>(c) <= 126) {
+            cleaned.push_back(c);
+        }
     }
-    return content;
+    size_t first = cleaned.find_first_not_of(" \t");
+    if (first == string::npos) {
+        return "Player " + to_string(pid);
+    }
+    size_t last = cleaned.find_last_not_of(" \t");
+    cleaned = cleaned.substr(first, (last - first + 1));
+    if (cleaned.size() > 32) {
+        cleaned = cleaned.substr(0, 32);
+    }
+    return cleaned;
 }
 
-static string AboutHandler() {
-    string content = FileManager::readFile("../static/about.html");
-    if (content.empty()) {
-        content = FileManager::readFile("static/about.html");
+static string sanitizeRoomCode(const string& raw) {
+    string cleaned;
+    cleaned.reserve(raw.size());
+    for (char c : raw) {
+        if (isalnum(static_cast<unsigned char>(c))) {
+            cleaned.push_back(static_cast<char>(toupper(static_cast<unsigned char>(c))));
+        }
     }
-    return content;
+    if (cleaned.size() > 8) {
+        cleaned = cleaned.substr(0, 8);
+    }
+    return cleaned;
 }
 
 static string LargeHandler() {
@@ -331,7 +346,8 @@ static void handleWebSocketTextMessage(Connection& conn,
         uint32_t pid = getOrAdmitPlayer(conn, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, nextPlayerId, inputQueue, roomManager);
         if (pid == 0) return;
 
-        string name = (root.contains("name") && root["name"].isString()) ? root["name"].asString() : ("Player " + to_string(pid));
+        string rawName = (root.contains("name") && root["name"].isString()) ? root["name"].asString() : "";
+        string name = sanitizePlayerName(rawName, pid);
         double trackLen = (root.contains("trackLength") && root["trackLength"].isNumber()) ? root["trackLength"].asDouble() : 1500.0;
         if (trackLen < 50.0) trackLen = 50.0;
         string code, error;
@@ -379,8 +395,14 @@ static void handleWebSocketTextMessage(Connection& conn,
             return;
         }
 
-        string code = root["code"].asString();
-        string name = (root.contains("name") && root["name"].isString()) ? root["name"].asString() : ("Player " + to_string(pid));
+        string code = sanitizeRoomCode(root["code"].asString());
+        if (code.empty()) {
+            string errFrame = WebSocketFrame::encodeTextFrame(RoomProtocol::makeError("Invalid room code"));
+            sendWebSocketFrameSafe(conn, epollFd, errFrame);
+            return;
+        }
+        string rawName = (root.contains("name") && root["name"].isString()) ? root["name"].asString() : "";
+        string name = sanitizePlayerName(rawName, pid);
         string error;
         uint32_t roomId = 0;
         if (!roomManager.joinRoom(code, pid, conn.fd, name, roomId, error)) {
@@ -658,19 +680,60 @@ static void handleWebSocketTextMessage(Connection& conn,
     }
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     signal(SIGPIPE, SIG_IGN);
     signal(SIGINT, handleSignal);
     signal(SIGTERM, handleSignal);
 
-    Router router;
-    router.addRoute("/", HomeHandler);
-    router.addRoute("/about", AboutHandler);
+    ServerConfig config;
+    string configErr;
+    int parseRes = ServerConfig::parse(argc, argv, config, configErr);
+    if (parseRes > 0) {
+        return 0; // --help was displayed
+    }
+    if (parseRes < 0) {
+        cerr << "Configuration Error: " << configErr << "\n";
+        return 1;
+    }
+
+    Logger::init(config.logLevel);
+
+    Router router(config.staticDir);
+    router.addRoute("/", [&config]() -> HttpResponse {
+        string content;
+        if (FileManager::readFileBinary(config.staticDir + "/index.html", content)) {
+            return HttpResponse{200, "text/html; charset=utf-8", std::move(content)};
+        }
+        return HttpResponse{404, "text/html; charset=utf-8", "<h1>404 Not Found</h1>"};
+    });
+    router.addRoute("/about", [&config]() -> HttpResponse {
+        string content;
+        if (FileManager::readFileBinary(config.staticDir + "/about.html", content)) {
+            return HttpResponse{200, "text/html; charset=utf-8", std::move(content)};
+        }
+        return HttpResponse{404, "text/html; charset=utf-8", "<h1>404 Not Found</h1>"};
+    });
     router.addRoute("/large", LargeHandler);
+
+    auto serverStartTime = std::chrono::steady_clock::now();
+    router.addRoute("/health", [&config, serverStartTime](const HttpRequest&) -> HttpResponse {
+        HttpResponse res;
+        res.status = 200;
+        res.contentType = "application/json; charset=utf-8";
+        auto now = std::chrono::steady_clock::now();
+        double uptime = std::chrono::duration<double>(now - serverStartTime).count();
+        std::ostringstream ss;
+        ss << std::fixed << std::setprecision(3);
+        ss << "{\"status\":\"ok\",\"uptime_seconds\":" << uptime
+           << ",\"version\":\"1.0.0\""
+           << ",\"port\":" << config.port << "}";
+        res.body = ss.str();
+        return res;
+    });
 
     TaskQueue taskQueue;
     ResponseQueue responseQueue;
-    ThreadPool pool(THREAD_POOL_SIZE, taskQueue, responseQueue);
+    ThreadPool pool(config.threadPoolWorkers, taskQueue, responseQueue);
 
     InputQueue inputQueue;
     SnapshotQueue snapshotQueue;
@@ -720,8 +783,16 @@ int main() {
 
     struct sockaddr_in serverAddr{};
     serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port = htons(SERVER_PORT);
-    serverAddr.sin_addr.s_addr = INADDR_ANY;
+    serverAddr.sin_port = htons(static_cast<uint16_t>(config.port));
+    if (config.host == "0.0.0.0" || config.host.empty()) {
+        serverAddr.sin_addr.s_addr = INADDR_ANY;
+    } else {
+        if (inet_pton(AF_INET, config.host.c_str(), &serverAddr.sin_addr) <= 0) {
+            cerr << "Invalid listen host address: " << config.host << "\n";
+            close(serverSocket);
+            exit(EXIT_FAILURE);
+        }
+    }
     int opt = 1;
 
     if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
@@ -736,7 +807,7 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    if (listen(serverSocket, LISTEN_BACKLOG) < 0) {
+    if (listen(serverSocket, config.listenBacklog) < 0) {
         perror("Listen failed");
         close(serverSocket);
         exit(EXIT_FAILURE);
@@ -818,11 +889,12 @@ int main() {
     // Start 60 Hz simulation thread
     simulationThread.start();
 
-    epoll_event events[MAX_EPOLL_EVENTS];
-    Logger::log("Server started on port " + to_string(SERVER_PORT));
+    vector<epoll_event> events(config.maxEpollEvents);
+    Logger::info("Server started on " + config.host + ":" + to_string(config.port) +
+                 " (static dir: " + config.staticDir + ", workers: " + to_string(config.threadPoolWorkers) + ")");
 
     while (g_running) {
-        int readyCount = epoll_wait(epollFd, events, MAX_EPOLL_EVENTS, 500);
+        int readyCount = epoll_wait(epollFd, events.data(), config.maxEpollEvents, 500);
         if (readyCount < 0) {
             if (errno == EINTR) {
                 continue;

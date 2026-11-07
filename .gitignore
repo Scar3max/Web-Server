@@ -1,5 +1,7 @@
 *.log
 server.log
 build/
+build_debug/
+build_release/
 __pycache__/
 *.pyc

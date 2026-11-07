@@ -9,6 +9,7 @@ include_directories(include)
 
 add_executable(server
     src/main.cpp
+    src/Config.cpp
     src/Connection.cpp
     src/HttpParser.cpp
     src/Router.cpp
@@ -34,6 +35,7 @@ target_link_libraries(server ${CMAKE_DL_LIBS})
 # ThreadSanitizer build of the full server for comprehensive concurrency verification
 add_executable(server_tsan
     src/main.cpp
+    src/Config.cpp
     src/Connection.cpp
     src/HttpParser.cpp
     src/Router.cpp
@@ -60,6 +62,7 @@ target_link_libraries(server_tsan ${CMAKE_DL_LIBS})
 # AddressSanitizer & LeakSanitizer build of the full server for comprehensive memory safety verification
 add_executable(server_asan
     src/main.cpp
+    src/Config.cpp
     src/Connection.cpp
     src/HttpParser.cpp
     src/Router.cpp
