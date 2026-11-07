@@ -65,7 +65,13 @@ python3 tests/test_phase5_rooms.py
 
 echo ""
 echo "=================================================="
-echo "9. Running ApacheBench Concurrency Regression Test"
+echo "9. Running Phase 5.1 Room Lifecycle & Concurrency Audit"
+echo "=================================================="
+python3 tests/test_phase5_audit.py
+
+echo ""
+echo "=================================================="
+echo "10. Running ApacheBench Concurrency Regression Test"
 echo "=================================================="
 ab -n 5000 -c 50 http://127.0.0.1:8080/
 
@@ -77,18 +83,28 @@ trap - EXIT
 
 echo ""
 echo "=================================================="
-echo "10. Running Server Shutdown Under Active Load Test"
+echo "11. Running Server Shutdown Under Active Load Test"
 echo "=================================================="
 python3 tests/test_shutdown_under_load.py
 
 echo ""
 echo "=================================================="
-echo "11. Running Full Server ThreadSanitizer Verification"
+echo "12. Running Full Server ThreadSanitizer Verification"
 echo "=================================================="
 python3 -c "
 import sys; sys.path.insert(0, 'tests')
 import test_shutdown_under_load
 test_shutdown_under_load.test_shutdown_under_load('./build/server_tsan', use_setarch=True)
+"
+
+echo ""
+echo "=================================================="
+echo "13. Running Full Server AddressSanitizer & LeakSanitizer Verification"
+echo "=================================================="
+python3 -c "
+import sys; sys.path.insert(0, 'tests')
+import test_shutdown_under_load
+test_shutdown_under_load.test_shutdown_under_load('./build/server_asan', use_setarch=True)
 "
 
 echo ""
