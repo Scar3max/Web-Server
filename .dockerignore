@@ -1,0 +1,14 @@
+build/
+build_debug/
+build_release/
+.git/
+.gitignore
+tests/
+*.log
+server.log
+__pycache__/
+*.pyc
+.vscode/
+.idea/
+*.swp
+*.swo
