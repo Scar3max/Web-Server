@@ -1,16 +1,20 @@
 #pragma once
-#include<vector>
-#include<thread>
-#include "TaskQueue.h"
-#include<atomic>
 
-class ThreadPool{
-    private:
-        std::vector<std::thread> workers;
-        TaskQueue& taskQueue;
-        void worker();
-        std::atomic<bool> stop;
-    public:
-        ThreadPool(int numThreads,TaskQueue& queue);
-        ~ThreadPool();
+#include <vector>
+#include <thread>
+#include <atomic>
+#include "TaskQueue.h"
+#include "ResponseQueue.h"
+
+class ThreadPool {
+private:
+    std::vector<std::thread> workers;
+    TaskQueue& taskQueue;
+    ResponseQueue& responseQueue;
+    void worker();
+    std::atomic<bool> stop;
+
+public:
+    ThreadPool(int numThreads, TaskQueue& tQueue, ResponseQueue& rQueue);
+    ~ThreadPool();
 };

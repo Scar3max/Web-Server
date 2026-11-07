@@ -1,0 +1,47 @@
+#pragma once
+
+#include <string>
+#include <cstdint>
+#include <cstddef>
+
+enum class ConnectionState {
+    READING_REQUEST,
+    PROCESSING,
+    WRITING_RESPONSE,
+    CLOSING,
+    CLOSED
+};
+
+class Connection {
+public:
+    int fd = -1;
+    uint64_t id = 0;
+    ConnectionState state = ConnectionState::READING_REQUEST;
+
+    std::string inBuffer;
+    std::string outBuffer;
+    size_t bytesSent = 0;
+    bool shouldClose = true;
+
+    // Buffer limits
+    static constexpr size_t MAX_HEADER_SIZE = 8192;            // 8 KB
+    static constexpr size_t MAX_BODY_SIZE   = 10 * 1024 * 1024; // 10 MB
+    static constexpr size_t MAX_BUFFER_SIZE = MAX_HEADER_SIZE + MAX_BODY_SIZE;
+
+    enum class ParseResult {
+        INCOMPLETE,
+        COMPLETE,
+        TOO_LARGE,
+        BAD_REQUEST
+    };
+
+    Connection() = default;
+    Connection(int socketFd, uint64_t connId);
+
+    // Checks if inBuffer currently contains a complete HTTP request.
+    // If complete, sets requestLen to the byte length of that request.
+    ParseResult checkRequest(size_t& requestLen) const;
+
+    // Resets buffers and state for the next request on a persistent connection
+    void resetForNextRequest();
+};
