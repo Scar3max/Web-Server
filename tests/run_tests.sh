@@ -77,6 +77,19 @@ python3 tests/test_phase6_track_collisions.py
 
 echo ""
 echo "=================================================="
+echo "10.1 Running Phase 6.1 Collision Stability & Penetration Tests"
+echo "=================================================="
+./build/test_collision_stability
+
+echo ""
+echo "=================================================="
+echo "10.2 Running Phase 6.1 Server-Browser Track Geometry Parity Tests"
+echo "=================================================="
+python3 tests/test_track_parity.py
+
+
+echo ""
+echo "=================================================="
 echo "11. Running ApacheBench Concurrency Regression Test"
 echo "=================================================="
 ab -n 5000 -c 50 http://127.0.0.1:8080/

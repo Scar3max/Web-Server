@@ -375,17 +375,18 @@ def test_collision_side_by_side():
             if sep < min_separation_observed:
                 min_separation_observed = sep
                 
-            # If they contacted, separation must not collapse to 0 (must be >= 2.5m after de-penetration)
+            # If they contacted, verify strict de-penetration (residual penetration <= 1e-3m)
             if sep < 3.5:
                 collision_detected = True
-                assert sep >= 2.5, f"Excessive penetration observed: sep={sep}m"
+                residual_pen = max(0.0, 3.0 - sep)
+                assert residual_pen <= 1e-3, f"Excessive penetration observed: sep={sep:.4f}m, residual={residual_pen:.4f}m"
                 assert p1["speed"] <= 160.0 and p2["speed"] <= 160.0, "Velocity blew up after collision"
                 
     s1.close()
     s2.close()
     time.sleep(0.05)
     assert collision_detected, f"Vehicles never approached collision threshold (min sep={min_separation_observed:.2f}m)"
-    print(f"[PASS] Side-by-side collision resolved cleanly (min sep={min_separation_observed:.2f}m, bounded impulses).")
+    print(f"[PASS] Side-by-side collision resolved cleanly (min sep={min_separation_observed:.4f}m, residual pen <= 1e-3m).")
 
 def test_collision_rear_end():
     print("[TEST] Rear-End Collision & Forward Momentum Transfer...")
@@ -469,6 +470,63 @@ def test_collision_boundary_clamping():
     s2.close()
     time.sleep(0.05)
     print("[PASS] Vehicle lateral offsets strictly clamped to [-1.0, 1.0] under boundary collision.")
+
+def test_collision_multi_vehicle_live():
+    print("[TEST] Multi-Vehicle Simultaneous 3-Car Pack Collision in Live Room...")
+    s1 = connect_ws()
+    s2 = connect_ws()
+    s3 = connect_ws()
+    p1_in = InputSender(s1)
+    p2_in = InputSender(s2)
+    p3_in = InputSender(s3)
+
+    send_ws_json(s1, {"type": "create_room", "name": "Pack1"})
+    r_created = recv_until_type(s1, "room_created")
+    code = r_created["roomCode"]
+
+    send_ws_json(s2, {"type": "join_room", "code": code, "name": "Pack2"})
+    recv_until_type(s2, "room_joined")
+
+    send_ws_json(s3, {"type": "join_room", "code": code, "name": "Pack3"})
+    recv_until_type(s3, "room_joined")
+
+    send_ws_json(s1, {"type": "set_ready", "ready": True})
+    recv_until_type(s1, "ready_updated")
+    send_ws_json(s2, {"type": "set_ready", "ready": True})
+    recv_until_type(s2, "ready_updated")
+    send_ws_json(s3, {"type": "set_ready", "ready": True})
+    recv_until_type(s3, "ready_updated")
+
+    send_ws_json(s1, {"type": "start_race"})
+    recv_until_type(s1, "race_started", timeout=6.5)
+
+    start_t = time.time()
+    pack_collision_seen = False
+    while time.time() - start_t < 3.0:
+        p1_in.send(up=True, right=True)
+        p2_in.send(up=True, left=True)
+        p3_in.send(up=True)
+
+        snap = recv_next_snapshot(s1, timeout=0.05)
+        if snap and "players" in snap and len(snap["players"]) == 3:
+            players = snap["players"]
+            for i in range(len(players)):
+                for j in range(i + 1, len(players)):
+                    dx = (players[j]["x"] - players[i]["x"]) * 7.5
+                    ds = players[j]["distance"] - players[i]["distance"]
+                    sep = math.hypot(dx, ds)
+                    if sep < 3.5:
+                        pack_collision_seen = True
+                        residual = max(0.0, 3.0 - sep)
+                        assert residual <= 1e-3, f"3-car pack penetration: sep={sep:.4f}m, residual={residual:.4f}m"
+                        assert players[i]["speed"] <= 180.0 and players[j]["speed"] <= 180.0
+
+    s1.close()
+    s2.close()
+    s3.close()
+    time.sleep(0.05)
+    print(f"[PASS] 3-Car simultaneous live pack collision verified (residual penetration <= 1e-3m).")
+
 
 def test_finished_vehicle_immutability():
     print("[TEST] Finished Vehicle Immutability Under Post-Race Collision...")
@@ -670,6 +728,7 @@ if __name__ == "__main__":
     test_collision_side_by_side()
     test_collision_rear_end()
     test_collision_boundary_clamping()
+    test_collision_multi_vehicle_live()
     test_finished_vehicle_immutability()
     test_multi_room_collision_isolation()
     test_simulation_tick_and_snapshot_rate()
