@@ -87,6 +87,13 @@ echo "10.2 Running Phase 6.1 Server-Browser Track Geometry Parity Tests"
 echo "=================================================="
 python3 tests/test_track_parity.py
 
+echo ""
+echo "=================================================="
+echo "10.3 Running Phase 6.2 Client-Side Prediction & Reconciliation Tests"
+echo "=================================================="
+python3 tests/test_phase6_2_prediction.py
+
+
 
 echo ""
 echo "=================================================="
