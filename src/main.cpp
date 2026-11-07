@@ -38,6 +38,7 @@
 #include "RoomManager.h"
 #include "RoomProtocol.h"
 #include "ServerMetrics.h"
+#include "BinarySnapshot.h"
 
 using namespace std;
 
@@ -623,7 +624,27 @@ static void handleWebSocketTextMessage(Connection& conn,
         in.controls.left = cObj["left"].asBool();
         in.controls.right = cObj["right"].asBool();
 
+        if (root.contains("format") && root["format"].isString()) {
+            string fmt = root["format"].asString();
+            if (fmt == "binary" || fmt == "bin") {
+                conn.snapshotFormat = Connection::SnapshotFormat::BINARY;
+            } else if (fmt == "json") {
+                conn.snapshotFormat = Connection::SnapshotFormat::JSON;
+            }
+        }
+
         inputQueue.pushInput(in);
+    } else if (type == "set_format") {
+        if (root.contains("format") && root["format"].isString()) {
+            string fmt = root["format"].asString();
+            if (fmt == "binary" || fmt == "bin") {
+                conn.snapshotFormat = Connection::SnapshotFormat::BINARY;
+            } else if (fmt == "json") {
+                conn.snapshotFormat = Connection::SnapshotFormat::JSON;
+            }
+        }
+    } else if (type == "subscribe_binary") {
+        conn.snapshotFormat = Connection::SnapshotFormat::BINARY;
     } else if (type == "telemetry") {
         string echo = WebSocketFrame::encodeTextFrame(payload);
         if (!sendWebSocketFrameSafe(conn, epollFd, echo)) {
@@ -864,6 +885,100 @@ int main() {
                 auto snapshots = snapshotQueue.popLatestPerRoom();
                 vector<int> slowClientsToDisconnect;
 
+                // Shared non-blocking snapshot delivery helper enforcing per-client backpressure,
+                // direct zero-copy write for uncongested sockets, and remainder buffering for partial writes.
+                auto deliverSnapshot = [&](int sockFd, Connection& playerConn, const string& frame) {
+                    bool socketBlocked = (playerConn.bytesSent < playerConn.outBuffer.size());
+                    bool bufferTooLarge = (playerConn.outBuffer.size() >= Connection::SNAPSHOT_BACKPRESSURE_THRESHOLD);
+
+                    if (socketBlocked || bufferTooLarge) {
+                        playerConn.consecutiveDroppedSnapshots++;
+                        ServerMetrics::instance().backpressureSnapshotDropsTotal.fetch_add(1, std::memory_order_relaxed);
+                        if (playerConn.consecutiveDroppedSnapshots >= Connection::MAX_CONSECUTIVE_DROPPED_SNAPSHOTS) {
+                            ServerMetrics::instance().backpressureSlowClientDisconnectsTotal.fetch_add(1, std::memory_order_relaxed);
+                            slowClientsToDisconnect.push_back(sockFd);
+                        }
+                        return;
+                    }
+
+                    playerConn.consecutiveDroppedSnapshots = 0;
+                    ServerMetrics::instance().snapshotFanoutDeliveriesTotal.fetch_add(1, std::memory_order_relaxed);
+
+                    // Fast path: direct zero-copy socket transmission if output buffer is clear
+                    if (playerConn.outBuffer.empty()) {
+                        ssize_t sent = send(playerConn.fd, frame.data(), frame.size(), MSG_NOSIGNAL);
+                        if (sent > 0) {
+                            ServerMetrics::instance().recordBytesTransmitted(sent);
+                            ServerMetrics::instance().wsFramesSentTotal.fetch_add(1, std::memory_order_relaxed);
+                            if (playerConn.snapshotFormat == Connection::SnapshotFormat::BINARY) {
+                                ServerMetrics::instance().snapshotBinaryFramesSentTotal.fetch_add(1, std::memory_order_relaxed);
+                            } else {
+                                ServerMetrics::instance().snapshotJsonFramesSentTotal.fetch_add(1, std::memory_order_relaxed);
+                            }
+
+                            if (static_cast<size_t>(sent) == frame.size()) {
+                                ServerMetrics::instance().snapshotDirectSendsTotal.fetch_add(1, std::memory_order_relaxed);
+                                ServerMetrics::instance().recordOutputBufferSize(0);
+                                return;
+                            } else {
+                                ServerMetrics::instance().recordPartialWrite();
+                                ServerMetrics::instance().snapshotBufferedSendsTotal.fetch_add(1, std::memory_order_relaxed);
+                                playerConn.outBuffer.assign(frame.data() + sent, frame.size() - sent);
+                                playerConn.bytesSent = 0;
+                                ServerMetrics::instance().recordOutputBufferSize(playerConn.outBuffer.size());
+                                epoll_event ev{};
+                                ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
+                                ev.data.fd = sockFd;
+                                epoll_ctl(epollFd, EPOLL_CTL_MOD, sockFd, &ev);
+                                return;
+                            }
+                        } else if (sent < 0) {
+                            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                                ServerMetrics::instance().recordEagain();
+                                ServerMetrics::instance().snapshotBufferedSendsTotal.fetch_add(1, std::memory_order_relaxed);
+                                playerConn.outBuffer.assign(frame.data(), frame.size());
+                                playerConn.bytesSent = 0;
+                                ServerMetrics::instance().recordOutputBufferSize(playerConn.outBuffer.size());
+                                epoll_event ev{};
+                                ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
+                                ev.data.fd = sockFd;
+                                epoll_ctl(epollFd, EPOLL_CTL_MOD, sockFd, &ev);
+                                return;
+                            }
+                            if (errno != EINTR) {
+                                slowClientsToDisconnect.push_back(sockFd);
+                                return;
+                            }
+                        }
+                    }
+
+                    // Fallback path: buffer frame and flush
+                    playerConn.outBuffer.append(frame);
+                    ServerMetrics::instance().snapshotBufferedSendsTotal.fetch_add(1, std::memory_order_relaxed);
+                    ServerMetrics::instance().wsFramesSentTotal.fetch_add(1, std::memory_order_relaxed);
+                    if (playerConn.snapshotFormat == Connection::SnapshotFormat::BINARY) {
+                        ServerMetrics::instance().snapshotBinaryFramesSentTotal.fetch_add(1, std::memory_order_relaxed);
+                    } else {
+                        ServerMetrics::instance().snapshotJsonFramesSentTotal.fetch_add(1, std::memory_order_relaxed);
+                    }
+
+                    bool sockErr = flushSendBuffer(playerConn);
+                    if (sockErr) {
+                        slowClientsToDisconnect.push_back(sockFd);
+                        return;
+                    }
+
+                    if (playerConn.bytesSent >= playerConn.outBuffer.size()) {
+                        playerConn.outBuffer.clear();
+                        playerConn.bytesSent = 0;
+                    } else {
+                        epoll_event ev{};
+                        ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
+                        ev.data.fd = sockFd;
+                        epoll_ctl(epollFd, EPOLL_CTL_MOD, sockFd, &ev);
+                    }
+                };
+
                 for (const auto& snap : snapshots) {
                     for (const auto& p : snap.players) {
                         if (p.ackSeq > 0) {
@@ -871,51 +986,52 @@ int main() {
                         }
                     }
 
-                    string jsonStr = snap.toJson();
-                    string frame = WebSocketFrame::encodeTextFrame(jsonStr);
+                    // Lazy immutable snapshot serializer: generates frame at most once per room per format
+                    string jsonFrame;
+                    string binaryFrame;
+                    bool jsonSerialized = false;
+                    bool binarySerialized = false;
+
+                    auto getFrame = [&](Connection::SnapshotFormat fmt) -> const string& {
+                        if (fmt == Connection::SnapshotFormat::BINARY) {
+                            if (!binarySerialized) {
+                                auto t0 = std::chrono::steady_clock::now();
+                                string binPayload = BinarySnapshot::serialize(snap);
+                                ServerMetrics::instance().snapshotBinaryPayloadBytesTotal.fetch_add(binPayload.size(), std::memory_order_relaxed);
+                                binaryFrame = WebSocketFrame::encodeBinaryFrame(binPayload);
+                                auto t1 = std::chrono::steady_clock::now();
+                                uint64_t micros = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+                                ServerMetrics::instance().snapshotSerializationMicrosTotal.fetch_add(micros, std::memory_order_relaxed);
+                                binarySerialized = true;
+                            }
+                            return binaryFrame;
+                        } else {
+                            if (!jsonSerialized) {
+                                auto t0 = std::chrono::steady_clock::now();
+                                string jsonStr = snap.toJson();
+                                ServerMetrics::instance().snapshotJsonPayloadBytesTotal.fetch_add(jsonStr.size(), std::memory_order_relaxed);
+                                jsonFrame = WebSocketFrame::encodeTextFrame(jsonStr);
+                                auto t1 = std::chrono::steady_clock::now();
+                                uint64_t micros = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+                                ServerMetrics::instance().snapshotSerializationMicrosTotal.fetch_add(micros, std::memory_order_relaxed);
+                                jsonSerialized = true;
+                            }
+                            return jsonFrame;
+                        }
+                    };
 
                     if (snap.roomId == 0) {
+                        // Practice mode fan-out: isolate strictly to practice players
                         for (const auto& [pid, sockFd] : playerToSocket) {
                             if (roomManager.getPlayerRoomId(pid) == 0) {
                                 auto cIt = connections.find(sockFd);
                                 if (cIt != connections.end() && cIt->second.protocol == ConnectionProtocol::WEBSOCKET) {
-                                    Connection& playerConn = cIt->second;
-
-                                    bool socketBlocked = (playerConn.bytesSent < playerConn.outBuffer.size());
-                                    bool bufferTooLarge = (playerConn.outBuffer.size() >= Connection::SNAPSHOT_BACKPRESSURE_THRESHOLD);
-
-                                    if (socketBlocked || bufferTooLarge) {
-                                        playerConn.consecutiveDroppedSnapshots++;
-                                        ServerMetrics::instance().backpressureSnapshotDropsTotal.fetch_add(1, std::memory_order_relaxed);
-                                        if (playerConn.consecutiveDroppedSnapshots >= Connection::MAX_CONSECUTIVE_DROPPED_SNAPSHOTS) {
-                                            ServerMetrics::instance().backpressureSlowClientDisconnectsTotal.fetch_add(1, std::memory_order_relaxed);
-                                            slowClientsToDisconnect.push_back(sockFd);
-                                        }
-                                        continue;
-                                    }
-
-                                    playerConn.consecutiveDroppedSnapshots = 0;
-                                    playerConn.outBuffer.append(frame);
-                                    ServerMetrics::instance().wsFramesSentTotal.fetch_add(1, std::memory_order_relaxed);
-                                    bool sockErr = flushSendBuffer(playerConn);
-                                    if (sockErr) {
-                                        slowClientsToDisconnect.push_back(sockFd);
-                                        continue;
-                                    }
-
-                                    if (playerConn.bytesSent >= playerConn.outBuffer.size()) {
-                                        playerConn.outBuffer.clear();
-                                        playerConn.bytesSent = 0;
-                                    } else {
-                                        epoll_event ev{};
-                                        ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
-                                        ev.data.fd = sockFd;
-                                        epoll_ctl(epollFd, EPOLL_CTL_MOD, sockFd, &ev);
-                                    }
+                                    deliverSnapshot(sockFd, cIt->second, getFrame(cIt->second.snapshotFormat));
                                 }
                             }
                         }
                     } else {
+                        // Room mode fan-out: isolate strictly to members of this room
                         Room* room = roomManager.getRoom(snap.roomId);
                         if (!room) continue;
 
@@ -945,39 +1061,7 @@ int main() {
                             int sockFd = member.socketFd;
                             auto cIt = connections.find(sockFd);
                             if (cIt != connections.end() && cIt->second.protocol == ConnectionProtocol::WEBSOCKET) {
-                                Connection& playerConn = cIt->second;
-
-                                bool socketBlocked = (playerConn.bytesSent < playerConn.outBuffer.size());
-                                bool bufferTooLarge = (playerConn.outBuffer.size() >= Connection::SNAPSHOT_BACKPRESSURE_THRESHOLD);
-
-                                if (socketBlocked || bufferTooLarge) {
-                                    playerConn.consecutiveDroppedSnapshots++;
-                                    ServerMetrics::instance().backpressureSnapshotDropsTotal.fetch_add(1, std::memory_order_relaxed);
-                                    if (playerConn.consecutiveDroppedSnapshots >= Connection::MAX_CONSECUTIVE_DROPPED_SNAPSHOTS) {
-                                        ServerMetrics::instance().backpressureSlowClientDisconnectsTotal.fetch_add(1, std::memory_order_relaxed);
-                                        slowClientsToDisconnect.push_back(sockFd);
-                                    }
-                                    continue;
-                                }
-
-                                playerConn.consecutiveDroppedSnapshots = 0;
-                                playerConn.outBuffer.append(frame);
-                                ServerMetrics::instance().wsFramesSentTotal.fetch_add(1, std::memory_order_relaxed);
-                                bool sockErr = flushSendBuffer(playerConn);
-                                if (sockErr) {
-                                    slowClientsToDisconnect.push_back(sockFd);
-                                    continue;
-                                }
-
-                                if (playerConn.bytesSent >= playerConn.outBuffer.size()) {
-                                    playerConn.outBuffer.clear();
-                                    playerConn.bytesSent = 0;
-                                } else {
-                                    epoll_event ev{};
-                                    ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
-                                    ev.data.fd = sockFd;
-                                    epoll_ctl(epollFd, EPOLL_CTL_MOD, sockFd, &ev);
-                                }
+                                deliverSnapshot(sockFd, cIt->second, getFrame(cIt->second.snapshotFormat));
                             }
                         }
                     }
@@ -1121,6 +1205,17 @@ int main() {
 
                                 if (hsResult == WebSocketHandshake::HandshakeResult::SUCCESS) {
                                     conn.protocol = ConnectionProtocol::WEBSOCKET;
+                                    if (rawRequest.find("format=binary") != string::npos ||
+                                        rawRequest.find("format=bin") != string::npos ||
+                                        rawRequest.find("racing-binary") != string::npos) {
+                                        conn.snapshotFormat = Connection::SnapshotFormat::BINARY;
+                                        if (rawRequest.find("racing-binary") != string::npos) {
+                                            size_t endHeader = responseText.rfind("\r\n\r\n");
+                                            if (endHeader != string::npos) {
+                                                responseText.insert(endHeader + 2, "Sec-WebSocket-Protocol: racing-binary-v1\r\n");
+                                            }
+                                        }
+                                    }
                                     ServerMetrics::instance().recordWebSocketUpgrade();
                                     int sndbuf = 8192; // Bounded socket send buffer for responsive backpressure
                                     setsockopt(conn.fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));

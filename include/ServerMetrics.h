@@ -108,6 +108,18 @@ public:
     std::atomic<uint64_t> serverShutdownCleanupFailuresTotal{0};
 
     // ==========================================================
+    // 5. Snapshot Fan-Out & Optimization Metrics (Phase 7.1)
+    // ==========================================================
+    std::atomic<uint64_t> snapshotJsonPayloadBytesTotal{0};
+    std::atomic<uint64_t> snapshotBinaryPayloadBytesTotal{0};
+    std::atomic<uint64_t> snapshotJsonFramesSentTotal{0};
+    std::atomic<uint64_t> snapshotBinaryFramesSentTotal{0};
+    std::atomic<uint64_t> snapshotFanoutDeliveriesTotal{0};
+    std::atomic<uint64_t> snapshotDirectSendsTotal{0};
+    std::atomic<uint64_t> snapshotBufferedSendsTotal{0};
+    std::atomic<uint64_t> snapshotSerializationMicrosTotal{0};
+
+    // ==========================================================
     // Helper Recording Functions (Thread-safe, non-blocking)
     // ==========================================================
     void recordHttpRequest(int statusCode);

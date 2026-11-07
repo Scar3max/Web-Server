@@ -273,6 +273,24 @@ std::string ServerMetrics::toPrometheusText() const {
     emitMetric("server_shutdown_cleanup_failures_total", "Total failed resource cleanup attempts during shutdown", "counter",
                serverShutdownCleanupFailuresTotal.load(std::memory_order_relaxed));
 
+    // 6. Snapshot Optimization Metrics (Phase 7.1)
+    emitMetric("snapshot_json_payload_bytes_total", "Total serialized JSON snapshot payload bytes generated", "counter",
+               snapshotJsonPayloadBytesTotal.load(std::memory_order_relaxed));
+    emitMetric("snapshot_binary_payload_bytes_total", "Total serialized binary snapshot payload bytes generated", "counter",
+               snapshotBinaryPayloadBytesTotal.load(std::memory_order_relaxed));
+    emitMetric("snapshot_json_frames_sent_total", "Total WebSocket JSON text frames dispatched", "counter",
+               snapshotJsonFramesSentTotal.load(std::memory_order_relaxed));
+    emitMetric("snapshot_binary_frames_sent_total", "Total WebSocket binary frames dispatched", "counter",
+               snapshotBinaryFramesSentTotal.load(std::memory_order_relaxed));
+    emitMetric("snapshot_fanout_deliveries_total", "Total individual client snapshot deliveries fanned out", "counter",
+               snapshotFanoutDeliveriesTotal.load(std::memory_order_relaxed));
+    emitMetric("snapshot_direct_sends_total", "Total zero-copy direct socket snapshot transmissions", "counter",
+               snapshotDirectSendsTotal.load(std::memory_order_relaxed));
+    emitMetric("snapshot_buffered_sends_total", "Total snapshot transmissions deferred or buffered due to partial writes", "counter",
+               snapshotBufferedSendsTotal.load(std::memory_order_relaxed));
+    emitMetric("snapshot_serialization_duration_total_micros", "Total time spent serializing snapshot payloads in microseconds", "counter",
+               snapshotSerializationMicrosTotal.load(std::memory_order_relaxed));
+
     return oss.str();
 }
 
@@ -359,6 +377,16 @@ std::string ServerMetrics::toJson() const {
             << "\"snapshotDropsTotal\":" << backpressureSnapshotDropsTotal.load(std::memory_order_relaxed) << ","
             << "\"controlFrameCongestionTotal\":" << backpressureControlFrameCongestionTotal.load(std::memory_order_relaxed) << ","
             << "\"inputAcksTotal\":" << backpressureInputAcksTotal.load(std::memory_order_relaxed)
+        << "},"
+        << "\"snapshotOptimization\":{"
+            << "\"jsonPayloadBytesTotal\":" << snapshotJsonPayloadBytesTotal.load(std::memory_order_relaxed) << ","
+            << "\"binaryPayloadBytesTotal\":" << snapshotBinaryPayloadBytesTotal.load(std::memory_order_relaxed) << ","
+            << "\"jsonFramesSentTotal\":" << snapshotJsonFramesSentTotal.load(std::memory_order_relaxed) << ","
+            << "\"binaryFramesSentTotal\":" << snapshotBinaryFramesSentTotal.load(std::memory_order_relaxed) << ","
+            << "\"fanoutDeliveriesTotal\":" << snapshotFanoutDeliveriesTotal.load(std::memory_order_relaxed) << ","
+            << "\"directSendsTotal\":" << snapshotDirectSendsTotal.load(std::memory_order_relaxed) << ","
+            << "\"bufferedSendsTotal\":" << snapshotBufferedSendsTotal.load(std::memory_order_relaxed) << ","
+            << "\"serializationMicrosTotal\":" << snapshotSerializationMicrosTotal.load(std::memory_order_relaxed)
         << "}"
         << "}";
 
