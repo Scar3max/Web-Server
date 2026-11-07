@@ -27,10 +27,15 @@ void SnapshotQueue::push(WorldSnapshot snapshot) {
     int targetFd = -1;
     {
         std::lock_guard<std::mutex> lock(queueMutex);
+        totalPushed++;
         if (snapshots.size() >= MAX_CAPACITY) {
             snapshots.pop_front(); // Drop oldest to prevent unbounded queue bloat
+            totalDropped++;
         }
         snapshots.push_back(std::move(snapshot));
+        if (snapshots.size() > highWaterMark) {
+            highWaterMark = snapshots.size();
+        }
         targetFd = wakeupFd;
     }
 
@@ -48,7 +53,32 @@ std::vector<WorldSnapshot> SnapshotQueue::popAll() {
     return result;
 }
 
+bool SnapshotQueue::popLatest(WorldSnapshot& outSnap) {
+    std::lock_guard<std::mutex> lock(queueMutex);
+    if (snapshots.empty()) {
+        return false;
+    }
+    outSnap = std::move(snapshots.back());
+    snapshots.clear();
+    return true;
+}
+
 size_t SnapshotQueue::size() {
     std::lock_guard<std::mutex> lock(queueMutex);
     return snapshots.size();
+}
+
+size_t SnapshotQueue::getHighWaterMark() {
+    std::lock_guard<std::mutex> lock(queueMutex);
+    return highWaterMark;
+}
+
+uint64_t SnapshotQueue::getTotalPushed() {
+    std::lock_guard<std::mutex> lock(queueMutex);
+    return totalPushed;
+}
+
+uint64_t SnapshotQueue::getTotalDropped() {
+    std::lock_guard<std::mutex> lock(queueMutex);
+    return totalDropped;
 }

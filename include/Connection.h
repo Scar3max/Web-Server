@@ -36,11 +36,15 @@ public:
     uint8_t wsFragmentedOpcode = 0;
     std::string wsMessageBuffer;
 
-    // Buffer limits
+    // Buffer & Backpressure limits
     static constexpr size_t MAX_HEADER_SIZE      = 8192;             // 8 KB
     static constexpr size_t MAX_BODY_SIZE        = 10 * 1024 * 1024; // 10 MB
     static constexpr size_t MAX_BUFFER_SIZE      = MAX_HEADER_SIZE + MAX_BODY_SIZE;
+    static constexpr size_t MAX_OUT_BUFFER_SIZE  = 64 * 1024;        // 64 KB max queued output
     static constexpr size_t MAX_WS_MESSAGE_SIZE  = 10 * 1024 * 1024; // 10 MB max assembled WS message
+    static constexpr size_t MAX_CONSECUTIVE_DROPPED_SNAPSHOTS = 50;  // 2.5 seconds of stalled writes
+
+    size_t consecutiveDroppedSnapshots = 0;
 
     enum class ParseResult {
         INCOMPLETE,

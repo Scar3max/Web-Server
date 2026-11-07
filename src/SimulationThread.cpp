@@ -27,18 +27,20 @@ void SimulationThread::stop() {
 
 void SimulationThread::runLoop() {
     using clock = std::chrono::steady_clock;
-    const auto tickDuration = std::chrono::microseconds(16666); // ~60.002 Hz
+    // 60.000 Hz fixed timestep (1 / 60 s = 16,666,667 ns)
+    const auto tickDuration = std::chrono::nanoseconds(16666667);
     auto nextTickTime = clock::now();
 
     // Diagnostics trackers
     auto lastDiagnosticTime = clock::now();
     uint64_t ticksInWindow = 0;
+    uint64_t snapshotsInWindow = 0;
 
     std::vector<PlayerEvent> events;
     std::vector<PlayerInput> inputs;
 
     while (running.load(std::memory_order_relaxed)) {
-        currentTick++;
+        uint64_t tick = currentTick.fetch_add(1, std::memory_order_relaxed) + 1;
         ticksInWindow++;
 
         // 1. Drain incoming player events and inputs
@@ -80,9 +82,9 @@ void SimulationThread::runLoop() {
         activePlayerCount.store(players.size(), std::memory_order_relaxed);
 
         // 3. Publish Authoritative World Snapshot at 20 Hz (every 3 ticks)
-        if (currentTick % physics::Config::TICKS_PER_SNAPSHOT == 0) {
+        if (tick % physics::Config::TICKS_PER_SNAPSHOT == 0) {
             WorldSnapshot snapshot;
-            snapshot.tick = currentTick;
+            snapshot.tick = tick;
 
             auto nowEpoch = std::chrono::system_clock::now().time_since_epoch();
             snapshot.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(nowEpoch).count();
@@ -99,15 +101,22 @@ void SimulationThread::runLoop() {
             }
 
             snapshotQueue.push(std::move(snapshot));
+            totalSnapshotsPublished.fetch_add(1, std::memory_order_relaxed);
+            snapshotsInWindow++;
         }
 
-        // 4. Calculate actual tick rate diagnostic every 1 second
+        // 4. Calculate actual tick rate and snapshot rate diagnostic every 1 second
         auto now = clock::now();
         auto elapsedDiag = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastDiagnosticTime).count();
         if (elapsedDiag >= 1000) {
-            double rate = (static_cast<double>(ticksInWindow) * 1000.0) / static_cast<double>(elapsedDiag);
-            actualTickRate.store(rate, std::memory_order_relaxed);
+            double tickRate = (static_cast<double>(ticksInWindow) * 1000.0) / static_cast<double>(elapsedDiag);
+            actualTickRate.store(tickRate, std::memory_order_relaxed);
+
+            double snapRate = (static_cast<double>(snapshotsInWindow) * 1000.0) / static_cast<double>(elapsedDiag);
+            actualSnapshotRate.store(snapRate, std::memory_order_relaxed);
+
             ticksInWindow = 0;
+            snapshotsInWindow = 0;
             lastDiagnosticTime = now;
         }
 
@@ -116,7 +125,7 @@ void SimulationThread::runLoop() {
         if (nextTickTime > now) {
             std::this_thread::sleep_until(nextTickTime);
         } else if (now - nextTickTime > std::chrono::milliseconds(100)) {
-            // Prevent spiral-of-death catch-up loops during extreme stalls
+            // Prevent spiral-of-death catch-up loops during extreme stalls (bounded catch-up)
             nextTickTime = now;
         }
     }

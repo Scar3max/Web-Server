@@ -2,8 +2,9 @@
 
 #include <mutex>
 #include <vector>
-#include <queue>
+#include <unordered_map>
 #include <cstdint>
+#include <algorithm>
 #include "Player.h"
 
 struct PlayerEvent {
@@ -24,40 +25,64 @@ class InputQueue {
 private:
     std::mutex queueMutex;
     std::vector<PlayerEvent> eventQueue;
-    std::vector<PlayerInput> inputQueue;
-    static constexpr size_t MAX_CAPACITY = 2048;
+    std::unordered_map<uint32_t, PlayerInput> pendingInputs;
+
+    size_t highWaterEvents = 0;
+    size_t highWaterInputs = 0;
 
 public:
     InputQueue() = default;
 
-    bool pushEvent(PlayerEvent ev) {
+    // Critical lifecycle events (JOIN / LEAVE) are guaranteed and never dropped.
+    void pushEvent(PlayerEvent ev) {
         std::lock_guard<std::mutex> lock(queueMutex);
-        if (eventQueue.size() >= MAX_CAPACITY) {
-            return false;
+        if (ev.type == PlayerEvent::Type::LEAVE) {
+            // Prune any unconsumed inputs for the departing player
+            pendingInputs.erase(ev.playerId);
         }
         eventQueue.push_back(std::move(ev));
-        return true;
+        highWaterEvents = std::max(highWaterEvents, eventQueue.size());
     }
 
-    bool pushInput(PlayerInput in) {
+    // Input commands are coalesced per-player to the latest sequence number.
+    // This prevents input flooding from consuming unbounded memory or lagging the tick loop.
+    void pushInput(PlayerInput in) {
         std::lock_guard<std::mutex> lock(queueMutex);
-        if (inputQueue.size() >= MAX_CAPACITY) {
-            return false;
+        auto it = pendingInputs.find(in.playerId);
+        if (it == pendingInputs.end()) {
+            pendingInputs[in.playerId] = std::move(in);
+        } else if (in.seq > it->second.seq) {
+            it->second = std::move(in);
         }
-        inputQueue.push_back(std::move(in));
-        return true;
+        highWaterInputs = std::max(highWaterInputs, pendingInputs.size());
     }
 
+    // Drains all lifecycle events and the latest consolidated inputs for all active players.
     void drain(std::vector<PlayerEvent>& outEvents, std::vector<PlayerInput>& outInputs) {
         std::lock_guard<std::mutex> lock(queueMutex);
         outEvents.swap(eventQueue);
         eventQueue.clear();
-        outInputs.swap(inputQueue);
-        inputQueue.clear();
+
+        outInputs.clear();
+        outInputs.reserve(pendingInputs.size());
+        for (auto& [pid, in] : pendingInputs) {
+            outInputs.push_back(std::move(in));
+        }
+        pendingInputs.clear();
     }
 
     size_t size() {
         std::lock_guard<std::mutex> lock(queueMutex);
-        return eventQueue.size() + inputQueue.size();
+        return eventQueue.size() + pendingInputs.size();
+    }
+
+    size_t getHighWaterEvents() {
+        std::lock_guard<std::mutex> lock(queueMutex);
+        return highWaterEvents;
+    }
+
+    size_t getHighWaterInputs() {
+        std::lock_guard<std::mutex> lock(queueMutex);
+        return highWaterInputs;
     }
 };

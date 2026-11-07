@@ -28,6 +28,9 @@ private:
     std::deque<WorldSnapshot> snapshots;
     int wakeupFd = -1;
     static constexpr size_t MAX_CAPACITY = 32;
+    size_t highWaterMark = 0;
+    uint64_t totalPushed = 0;
+    uint64_t totalDropped = 0;
 
 public:
     SnapshotQueue() = default;
@@ -39,5 +42,9 @@ public:
 
     void push(WorldSnapshot snapshot);
     std::vector<WorldSnapshot> popAll();
+    bool popLatest(WorldSnapshot& outSnap);
     size_t size();
+    size_t getHighWaterMark();
+    uint64_t getTotalPushed();
+    uint64_t getTotalDropped();
 };

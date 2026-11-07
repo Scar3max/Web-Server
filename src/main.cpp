@@ -15,6 +15,8 @@
 #include <fcntl.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
+#include <sstream>
+#include <iomanip>
 
 #include "HttpParser.h"
 #include "Router.h"
@@ -148,8 +150,29 @@ static bool flushSendBuffer(Connection& conn) {
     return false;
 }
 
+// Safely buffers and flushes an outgoing WebSocket frame, resetting outBuffer when fully written
+// or registering EPOLLOUT if write blocked. Returns true on success/EAGAIN, false on fatal socket error.
+static bool sendWebSocketFrameSafe(Connection& conn, int epollFd, const string& frame) {
+    conn.outBuffer.append(frame);
+    bool sockErr = flushSendBuffer(conn);
+    if (sockErr) {
+        return false;
+    }
+    if (conn.bytesSent >= conn.outBuffer.size()) {
+        conn.outBuffer.clear();
+        conn.bytesSent = 0;
+    } else {
+        epoll_event ev{};
+        ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
+        ev.data.fd = conn.fd;
+        epoll_ctl(epollFd, EPOLL_CTL_MOD, conn.fd, &ev);
+    }
+    return true;
+}
+
 // Processes incoming WebSocket text message (input protocol, telemetry echo, or plain text echo)
 static void handleWebSocketTextMessage(Connection& conn,
+                                       int epollFd,
                                        const string& payload,
                                        unordered_map<int, uint32_t>& socketToPlayer,
                                        unordered_map<uint32_t, int>& playerToSocket,
@@ -167,8 +190,7 @@ static void handleWebSocketTextMessage(Connection& conn,
         }
         // Plain text: echo back for backwards compatibility with Phase 2 echo tests
         string echo = WebSocketFrame::encodeTextFrame(payload);
-        conn.outBuffer.append(echo);
-        flushSendBuffer(conn);
+        sendWebSocketFrameSafe(conn, epollFd, echo);
         return;
     }
 
@@ -197,8 +219,7 @@ static void handleWebSocketTextMessage(Connection& conn,
             welcome["type"] = "welcome";
             welcome["playerId"] = static_cast<int64_t>(pid);
             string welcomeFrame = WebSocketFrame::encodeTextFrame(welcome.serialize());
-            conn.outBuffer.append(welcomeFrame);
-            flushSendBuffer(conn);
+            sendWebSocketFrameSafe(conn, epollFd, welcomeFrame);
         } else {
             pid = it->second;
         }
@@ -244,13 +265,11 @@ static void handleWebSocketTextMessage(Connection& conn,
     } else if (type == "telemetry") {
         // Backwards compatibility for Phase 3 telemetry tests
         string echo = WebSocketFrame::encodeTextFrame(payload);
-        conn.outBuffer.append(echo);
-        flushSendBuffer(conn);
+        sendWebSocketFrameSafe(conn, epollFd, echo);
     } else {
         // Generic JSON echo for other tests
         string echo = WebSocketFrame::encodeTextFrame(payload);
-        conn.outBuffer.append(echo);
-        flushSendBuffer(conn);
+        sendWebSocketFrameSafe(conn, epollFd, echo);
     }
 }
 
@@ -271,6 +290,28 @@ int main() {
     InputQueue inputQueue;
     SnapshotQueue snapshotQueue;
     SimulationThread simulationThread(inputQueue, snapshotQueue);
+
+    router.addRoute("/metrics", [&simulationThread]() -> HttpResponse {
+        HttpResponse res;
+        res.status = 200;
+        res.contentType = "application/json";
+
+        std::ostringstream oss;
+        oss << "{"
+            << "\"tick\":" << simulationThread.getTick() << ","
+            << "\"tickRate\":" << std::fixed << std::setprecision(2) << simulationThread.getTickRate() << ","
+            << "\"snapshotRate\":" << std::fixed << std::setprecision(2) << simulationThread.getSnapshotRate() << ","
+            << "\"activePlayers\":" << simulationThread.getPlayerCount() << ","
+            << "\"totalSnapshotsPublished\":" << simulationThread.getTotalSnapshots() << ","
+            << "\"inputQueueHighWaterEvents\":" << simulationThread.getInputQueue().getHighWaterEvents() << ","
+            << "\"inputQueueHighWaterInputs\":" << simulationThread.getInputQueue().getHighWaterInputs() << ","
+            << "\"snapshotQueueHighWater\":" << simulationThread.getSnapshotQueue().getHighWaterMark() << ","
+            << "\"snapshotQueueTotalDropped\":" << simulationThread.getSnapshotQueue().getTotalDropped()
+            << "}";
+
+        res.body = oss.str();
+        return res;
+    });
 
     int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (serverSocket < 0) {
@@ -445,28 +486,56 @@ int main() {
                 uint64_t counter = 0;
                 while (read(snapshotWakeupFd, &counter, sizeof(counter)) > 0) {}
 
-                auto snapshots = snapshotQueue.popAll();
-                for (const auto& snap : snapshots) {
-                    string jsonStr = snap.toJson();
+                WorldSnapshot latestSnap;
+                if (snapshotQueue.popLatest(latestSnap)) {
+                    string jsonStr = latestSnap.toJson();
                     string frame = WebSocketFrame::encodeTextFrame(jsonStr);
+
+                    vector<int> slowClientsToDisconnect;
 
                     for (const auto& [pid, sockFd] : playerToSocket) {
                         auto cIt = connections.find(sockFd);
                         if (cIt != connections.end() && cIt->second.protocol == ConnectionProtocol::WEBSOCKET) {
                             Connection& playerConn = cIt->second;
-                            // Bounded buffer check: if buffer is not congested, append snapshot
-                            if (playerConn.outBuffer.size() < 64 * 1024) {
-                                playerConn.outBuffer.append(frame);
-                                flushSendBuffer(playerConn);
 
-                                if (playerConn.bytesSent < playerConn.outBuffer.size()) {
-                                    epoll_event ev{};
-                                    ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
-                                    ev.data.fd = sockFd;
-                                    epoll_ctl(epollFd, EPOLL_CTL_MOD, sockFd, &ev);
+                            // Backpressure check:
+                            // If socket is blocked (pending unsent data) or buffer exceeds 64 KB:
+                            bool socketBlocked = (playerConn.bytesSent < playerConn.outBuffer.size());
+                            bool bufferTooLarge = (playerConn.outBuffer.size() >= Connection::MAX_OUT_BUFFER_SIZE);
+
+                            if (socketBlocked || bufferTooLarge) {
+                                playerConn.consecutiveDroppedSnapshots++;
+                                if (playerConn.consecutiveDroppedSnapshots >= Connection::MAX_CONSECUTIVE_DROPPED_SNAPSHOTS) {
+                                    // Client stalled for >= 50 consecutive snapshots (~2.5s)
+                                    slowClientsToDisconnect.push_back(sockFd);
                                 }
+                                // Drop this snapshot for this client to prevent queuing stale state
+                                continue;
+                            }
+
+                            // Socket write buffer is clear: reset consecutive dropped snapshots counter
+                            playerConn.consecutiveDroppedSnapshots = 0;
+                            playerConn.outBuffer.append(frame);
+                            bool sockErr = flushSendBuffer(playerConn);
+                            if (sockErr) {
+                                slowClientsToDisconnect.push_back(sockFd);
+                                continue;
+                            }
+
+                            if (playerConn.bytesSent >= playerConn.outBuffer.size()) {
+                                playerConn.outBuffer.clear();
+                                playerConn.bytesSent = 0;
+                            } else {
+                                epoll_event ev{};
+                                ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
+                                ev.data.fd = sockFd;
+                                epoll_ctl(epollFd, EPOLL_CTL_MOD, sockFd, &ev);
                             }
                         }
+                    }
+
+                    for (int sfd : slowClientsToDisconnect) {
+                        closeConnection(sfd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue);
                     }
                 }
             }
@@ -600,6 +669,8 @@ int main() {
 
                                 if (hsResult == WebSocketHandshake::HandshakeResult::SUCCESS) {
                                     conn.protocol = ConnectionProtocol::WEBSOCKET;
+                                    int sndbuf = 8192; // Bounded socket send buffer for responsive backpressure
+                                    setsockopt(conn.fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
                                     conn.shouldClose = false;
                                     conn.outBuffer = std::move(responseText);
                                     conn.bytesSent = 0;
@@ -775,7 +846,7 @@ int main() {
                                     }
 
                                     // Route through message handler
-                                    handleWebSocketTextMessage(conn, frame.payload, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, nextPlayerId, inputQueue);
+                                    handleWebSocketTextMessage(conn, epollFd, frame.payload, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, nextPlayerId, inputQueue);
                                 }
                             }
                             // Data Frames: Continuation
@@ -841,7 +912,7 @@ int main() {
                                             break;
                                         }
 
-                                        handleWebSocketTextMessage(conn, conn.wsMessageBuffer, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, nextPlayerId, inputQueue);
+                                        handleWebSocketTextMessage(conn, epollFd, conn.wsMessageBuffer, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, nextPlayerId, inputQueue);
                                     } else if (conn.wsFragmentedOpcode == WebSocketFrame::OPCODE_BINARY) {
                                         string echoFrame = WebSocketFrame::encodeFrame(WebSocketFrame::OPCODE_BINARY, conn.wsMessageBuffer, true);
                                         conn.outBuffer.append(echoFrame);
