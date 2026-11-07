@@ -85,6 +85,11 @@ export class Renderer {
         if (gameState.speed > 80) {
             this.drawSpeedLines(ctx, w, h, gameState.speed);
         }
+
+        // 6. Optional Developer Diagnostics Overlay
+        if (gameState.diagnostics) {
+            this.drawDiagnostics(ctx, w, h, gameState.diagnostics);
+        }
     }
 
     renderCurvedRoad(ctx, localDist, trackLength) {
@@ -282,5 +287,37 @@ export class Renderer {
             ctx.lineTo(rx, y1 + len);
         }
         ctx.stroke();
+    }
+
+    drawDiagnostics(ctx, w, h, diag) {
+        ctx.save();
+        const boxW = 240;
+        const boxH = 145;
+        const x = 16;
+        const y = h - boxH - 16;
+
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+        ctx.strokeStyle = 'rgba(56, 189, 248, 0.5)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(x, y, boxW, boxH, 8);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = '#38bdf8';
+        ctx.font = '600 12px monospace';
+        ctx.fillText('DIAGNOSTICS (F3 / `)', x + 12, y + 20);
+
+        ctx.fillStyle = '#cbd5e1';
+        ctx.font = '11px monospace';
+        ctx.fillText(`RTT: ${diag.rtt.toFixed(1)} ms`, x + 12, y + 38);
+        ctx.fillText(`Snap Interval: ${diag.snapInterval.toFixed(1)} ms`, x + 12, y + 54);
+        ctx.fillText(`Reconciles: ${diag.reconciles}`, x + 12, y + 70);
+        ctx.fillText(`Last Corr: ${diag.lastCorrection.toFixed(4)} m`, x + 12, y + 86);
+        ctx.fillText(`Max Corr: ${diag.maxCorrection.toFixed(4)} m`, x + 12, y + 102);
+        ctx.fillText(`Unacked Inputs: ${diag.unackedInputs}`, x + 12, y + 118);
+        ctx.fillText(`Remote Extrap: ${diag.extrapolations}`, x + 12, y + 134);
+
+        ctx.restore();
     }
 }

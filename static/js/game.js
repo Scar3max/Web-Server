@@ -50,6 +50,20 @@ export class Game {
         this.lapLength = this.trackLength;
         this.pixelsPerMeter = 16.0;
 
+        // Developer Diagnostics Overlay (toggled via F3 or ` key)
+        this.showDebugStats = false;
+        this.lastSnapshotTime = 0;
+        this.snapshotInterval = 50.0;
+        this.rtt = 0.0;
+
+        if (typeof window !== 'undefined') {
+            window.addEventListener('keydown', (e) => {
+                if (e.key === '`' || e.key === 'F3') {
+                    this.showDebugStats = !this.showDebugStats;
+                }
+            });
+        }
+
         // Initialize local predictor at start line
         this.localPredictor.init({
             x: 0.0,
@@ -106,6 +120,13 @@ export class Game {
 
     handleSnapshot(snapshot, rtt) {
         this.latestServerTick = snapshot.tick;
+        const now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
+        if (this.lastSnapshotTime > 0) {
+            this.snapshotInterval = now - this.lastSnapshotTime;
+        }
+        this.lastSnapshotTime = now;
+        this.rtt = rtt || 0.0;
+
         const activeIds = new Set();
 
         for (const sp of snapshot.players) {
@@ -246,12 +267,33 @@ export class Game {
 
         const localPlayer = renderList[0];
 
+        // Gather developer diagnostic statistics if overlay is active
+        let diagnostics = null;
+        if (this.showDebugStats) {
+            const predStats = this.localPredictor.getDiagnosticStats();
+            let remoteExtrapTotal = 0;
+            for (const interp of this.remoteInterpolators.values()) {
+                const s = interp.getDiagnosticStats();
+                remoteExtrapTotal += s.extrapolations;
+            }
+            diagnostics = {
+                rtt: this.rtt,
+                snapInterval: this.snapshotInterval,
+                reconciles: predStats.reconciles,
+                lastCorrection: predStats.lastCorrection,
+                maxCorrection: predStats.maxCorrection,
+                unackedInputs: predStats.unackedInputs,
+                extrapolations: remoteExtrapTotal
+            };
+        }
+
         const gameState = {
             players: renderList,
             localPlayer: localPlayer,
             speed: this.localSpeed,
             trackLength: this.trackLength,
-            roadOffset: this.roadOffset
+            roadOffset: this.roadOffset,
+            diagnostics: diagnostics
         };
 
         this.renderer.render(gameState);

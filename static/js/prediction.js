@@ -308,6 +308,18 @@ export class LocalPlayerPredictor {
             heading: heading
         };
     }
+
+    getDiagnosticStats() {
+        return {
+            unackedInputs: this.inputHistory.length,
+            reconciles: this.reconciliationCount,
+            lastCorrection: this.lastPredictionError || 0.0,
+            maxCorrection: this.maxPredictionError || 0.0,
+            totalReplayed: this.totalReplayedInputs || 0,
+            visualErrorDist: Math.abs(this.visualError.distance),
+            visualErrorX: Math.abs(this.visualError.x)
+        };
+    }
 }
 
 /**
@@ -320,6 +332,7 @@ export class RemotePlayerInterpolator {
         this.snapshots = [];               // Ring buffer of { tick, timestamp, x, distance, speed, steer, worldX, worldY, heading }
         this.maxBuffer = 12;
         this.lastRenderState = null;
+        this.extrapolationsCount = 0;
     }
 
     pushSnapshot(sp) {
@@ -368,6 +381,7 @@ export class RemotePlayerInterpolator {
         // Target after newest snapshot: extrapolate linearly up to 100 ms, then freeze
         const newest = this.snapshots[this.snapshots.length - 1];
         if (targetTime >= newest.timestamp) {
+            this.extrapolationsCount++;
             const extraTime = (targetTime - newest.timestamp) / 1000.0;
             const maxExtra = 0.10; // Cap extrapolation at 100 ms
             const clampedExtra = Math.min(extraTime, maxExtra);
@@ -425,6 +439,13 @@ export class RemotePlayerInterpolator {
             worldX: worldX,
             worldY: worldY,
             heading: heading
+        };
+    }
+
+    getDiagnosticStats() {
+        return {
+            bufferDepth: this.snapshots.length,
+            extrapolations: this.extrapolationsCount
         };
     }
 }
