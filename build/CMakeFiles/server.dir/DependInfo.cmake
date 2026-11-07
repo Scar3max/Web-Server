@@ -16,6 +16,8 @@ set(CMAKE_DEPENDS_DEPENDENCY_FILES
   "/mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/Router.cpp" "CMakeFiles/server.dir/src/Router.cpp.o" "gcc" "CMakeFiles/server.dir/src/Router.cpp.o.d"
   "/mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/TaskQueue.cpp" "CMakeFiles/server.dir/src/TaskQueue.cpp.o" "gcc" "CMakeFiles/server.dir/src/TaskQueue.cpp.o.d"
   "/mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/ThreadPool.cpp" "CMakeFiles/server.dir/src/ThreadPool.cpp.o" "gcc" "CMakeFiles/server.dir/src/ThreadPool.cpp.o.d"
+  "/mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/WebSocketFrame.cpp" "CMakeFiles/server.dir/src/WebSocketFrame.cpp.o" "gcc" "CMakeFiles/server.dir/src/WebSocketFrame.cpp.o.d"
+  "/mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/WebSocketHandshake.cpp" "CMakeFiles/server.dir/src/WebSocketHandshake.cpp.o" "gcc" "CMakeFiles/server.dir/src/WebSocketHandshake.cpp.o.d"
   "/mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/main.cpp" "CMakeFiles/server.dir/src/main.cpp.o" "gcc" "CMakeFiles/server.dir/src/main.cpp.o.d"
   )
 

@@ -321,6 +321,54 @@ src/ThreadPool.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/src/ThreadPool.cpp.s
 .PHONY : src/ThreadPool.cpp.s
 
+src/WebSocketFrame.o: src/WebSocketFrame.cpp.o
+.PHONY : src/WebSocketFrame.o
+
+# target to build an object file
+src/WebSocketFrame.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/src/WebSocketFrame.cpp.o
+.PHONY : src/WebSocketFrame.cpp.o
+
+src/WebSocketFrame.i: src/WebSocketFrame.cpp.i
+.PHONY : src/WebSocketFrame.i
+
+# target to preprocess a source file
+src/WebSocketFrame.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/src/WebSocketFrame.cpp.i
+.PHONY : src/WebSocketFrame.cpp.i
+
+src/WebSocketFrame.s: src/WebSocketFrame.cpp.s
+.PHONY : src/WebSocketFrame.s
+
+# target to generate assembly for a file
+src/WebSocketFrame.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/src/WebSocketFrame.cpp.s
+.PHONY : src/WebSocketFrame.cpp.s
+
+src/WebSocketHandshake.o: src/WebSocketHandshake.cpp.o
+.PHONY : src/WebSocketHandshake.o
+
+# target to build an object file
+src/WebSocketHandshake.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/src/WebSocketHandshake.cpp.o
+.PHONY : src/WebSocketHandshake.cpp.o
+
+src/WebSocketHandshake.i: src/WebSocketHandshake.cpp.i
+.PHONY : src/WebSocketHandshake.i
+
+# target to preprocess a source file
+src/WebSocketHandshake.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/src/WebSocketHandshake.cpp.i
+.PHONY : src/WebSocketHandshake.cpp.i
+
+src/WebSocketHandshake.s: src/WebSocketHandshake.cpp.s
+.PHONY : src/WebSocketHandshake.s
+
+# target to generate assembly for a file
+src/WebSocketHandshake.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/src/WebSocketHandshake.cpp.s
+.PHONY : src/WebSocketHandshake.cpp.s
+
 src/main.o: src/main.cpp.o
 .PHONY : src/main.o
 
@@ -378,6 +426,12 @@ help:
 	@echo "... src/ThreadPool.o"
 	@echo "... src/ThreadPool.i"
 	@echo "... src/ThreadPool.s"
+	@echo "... src/WebSocketFrame.o"
+	@echo "... src/WebSocketFrame.i"
+	@echo "... src/WebSocketFrame.s"
+	@echo "... src/WebSocketHandshake.o"
+	@echo "... src/WebSocketHandshake.i"
+	@echo "... src/WebSocketHandshake.s"
 	@echo "... src/main.o"
 	@echo "... src/main.i"
 	@echo "... src/main.s"

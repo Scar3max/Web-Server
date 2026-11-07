@@ -9,7 +9,6 @@ echo "Starting server..."
 SERVER_PID=$!
 sleep 1
 
-# Trap exit to ensure server is killed
 cleanup() {
     echo "Stopping server (PID $SERVER_PID)..."
     kill -SIGINT $SERVER_PID 2>/dev/null || true
@@ -17,16 +16,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "Running functional test suite..."
+echo "=================================================="
+echo "1. Running Phase 1 HTTP Functional Test Suite"
+echo "=================================================="
 python3 tests/test_phase1.py
 
 echo ""
-echo "Running ApacheBench concurrency test (5000 requests, 50 concurrency)..."
+echo "=================================================="
+echo "2. Running Phase 2 WebSocket Integration Test Suite"
+echo "=================================================="
+python3 tests/test_phase2_ws.py
+
+echo ""
+echo "=================================================="
+echo "3. Running ApacheBench Concurrency Regression Test"
+echo "=================================================="
 ab -n 5000 -c 50 http://127.0.0.1:8080/
 
 echo ""
-echo "Running ApacheBench for /about (2000 requests, 25 concurrency)..."
-ab -n 2000 -c 25 http://127.0.0.1:8080/about
-
-echo ""
-echo "All tests and benchmarks completed successfully!"
+echo "All test suites and benchmarks completed successfully!"

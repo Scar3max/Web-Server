@@ -17,4 +17,8 @@ add_executable(server
     src/TaskQueue.cpp
     src/ResponseQueue.cpp
     src/ThreadPool.cpp
+    src/WebSocketHandshake.cpp
+    src/WebSocketFrame.cpp
 )
+
+target_link_libraries(server ${CMAKE_DL_LIBS})

@@ -12,16 +12,29 @@ enum class ConnectionState {
     CLOSED
 };
 
+enum class ConnectionProtocol {
+    HTTP,
+    WEBSOCKET
+};
+
 class Connection {
 public:
     int fd = -1;
     uint64_t id = 0;
     ConnectionState state = ConnectionState::READING_REQUEST;
+    ConnectionProtocol protocol = ConnectionProtocol::HTTP;
 
     std::string inBuffer;
     std::string outBuffer;
     size_t bytesSent = 0;
     bool shouldClose = true;
+
+    // WebSocket state tracking
+    bool wsCloseSent = false;
+    bool wsCloseReceived = false;
+    bool wsInFragmentedMessage = false;
+    uint8_t wsFragmentedOpcode = 0;
+    std::string wsMessageBuffer;
 
     // Buffer limits
     static constexpr size_t MAX_HEADER_SIZE = 8192;            // 8 KB

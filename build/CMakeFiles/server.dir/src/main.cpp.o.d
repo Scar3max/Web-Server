@@ -277,4 +277,6 @@ CMakeFiles/server.dir/src/main.cpp.o: \
  /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/include/ResponseQueue.h \
  /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/include/ThreadPool.h \
  /usr/include/c++/13/thread \
- /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/include/Connection.h
+ /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/include/Connection.h \
+ /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/include/WebSocketHandshake.h \
+ /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/include/WebSocketFrame.h

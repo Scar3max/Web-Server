@@ -5,7 +5,9 @@
 
 Connection::Connection(int socketFd, uint64_t connId)
     : fd(socketFd), id(connId), state(ConnectionState::READING_REQUEST),
-      bytesSent(0), shouldClose(true) {}
+      protocol(ConnectionProtocol::HTTP), bytesSent(0), shouldClose(true),
+      wsCloseSent(false), wsCloseReceived(false),
+      wsInFragmentedMessage(false), wsFragmentedOpcode(0) {}
 
 Connection::ParseResult Connection::checkRequest(size_t& requestLen) const {
     // 1. Look for standard header terminator \r\n\r\n (or \n\n fallback)
@@ -72,5 +74,5 @@ void Connection::resetForNextRequest() {
     state = ConnectionState::READING_REQUEST;
     outBuffer.clear();
     bytesSent = 0;
-    shouldClose = true;
+    shouldClose = (protocol == ConnectionProtocol::HTTP);
 }

@@ -195,6 +195,34 @@ CMakeFiles/server.dir/src/ThreadPool.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/server.dir/src/ThreadPool.cpp.s"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/ThreadPool.cpp -o CMakeFiles/server.dir/src/ThreadPool.cpp.s
 
+CMakeFiles/server.dir/src/WebSocketHandshake.cpp.o: CMakeFiles/server.dir/flags.make
+CMakeFiles/server.dir/src/WebSocketHandshake.cpp.o: /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/WebSocketHandshake.cpp
+CMakeFiles/server.dir/src/WebSocketHandshake.cpp.o: CMakeFiles/server.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_10) "Building CXX object CMakeFiles/server.dir/src/WebSocketHandshake.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/server.dir/src/WebSocketHandshake.cpp.o -MF CMakeFiles/server.dir/src/WebSocketHandshake.cpp.o.d -o CMakeFiles/server.dir/src/WebSocketHandshake.cpp.o -c /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/WebSocketHandshake.cpp
+
+CMakeFiles/server.dir/src/WebSocketHandshake.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/server.dir/src/WebSocketHandshake.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/WebSocketHandshake.cpp > CMakeFiles/server.dir/src/WebSocketHandshake.cpp.i
+
+CMakeFiles/server.dir/src/WebSocketHandshake.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/server.dir/src/WebSocketHandshake.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/WebSocketHandshake.cpp -o CMakeFiles/server.dir/src/WebSocketHandshake.cpp.s
+
+CMakeFiles/server.dir/src/WebSocketFrame.cpp.o: CMakeFiles/server.dir/flags.make
+CMakeFiles/server.dir/src/WebSocketFrame.cpp.o: /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/WebSocketFrame.cpp
+CMakeFiles/server.dir/src/WebSocketFrame.cpp.o: CMakeFiles/server.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_11) "Building CXX object CMakeFiles/server.dir/src/WebSocketFrame.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/server.dir/src/WebSocketFrame.cpp.o -MF CMakeFiles/server.dir/src/WebSocketFrame.cpp.o.d -o CMakeFiles/server.dir/src/WebSocketFrame.cpp.o -c /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/WebSocketFrame.cpp
+
+CMakeFiles/server.dir/src/WebSocketFrame.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/server.dir/src/WebSocketFrame.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/WebSocketFrame.cpp > CMakeFiles/server.dir/src/WebSocketFrame.cpp.i
+
+CMakeFiles/server.dir/src/WebSocketFrame.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/server.dir/src/WebSocketFrame.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/src/WebSocketFrame.cpp -o CMakeFiles/server.dir/src/WebSocketFrame.cpp.s
+
 # Object files for target server
 server_OBJECTS = \
 "CMakeFiles/server.dir/src/main.cpp.o" \
@@ -205,7 +233,9 @@ server_OBJECTS = \
 "CMakeFiles/server.dir/src/Logger.cpp.o" \
 "CMakeFiles/server.dir/src/TaskQueue.cpp.o" \
 "CMakeFiles/server.dir/src/ResponseQueue.cpp.o" \
-"CMakeFiles/server.dir/src/ThreadPool.cpp.o"
+"CMakeFiles/server.dir/src/ThreadPool.cpp.o" \
+"CMakeFiles/server.dir/src/WebSocketHandshake.cpp.o" \
+"CMakeFiles/server.dir/src/WebSocketFrame.cpp.o"
 
 # External object files for target server
 server_EXTERNAL_OBJECTS =
@@ -219,9 +249,11 @@ server: CMakeFiles/server.dir/src/Logger.cpp.o
 server: CMakeFiles/server.dir/src/TaskQueue.cpp.o
 server: CMakeFiles/server.dir/src/ResponseQueue.cpp.o
 server: CMakeFiles/server.dir/src/ThreadPool.cpp.o
+server: CMakeFiles/server.dir/src/WebSocketHandshake.cpp.o
+server: CMakeFiles/server.dir/src/WebSocketFrame.cpp.o
 server: CMakeFiles/server.dir/build.make
 server: CMakeFiles/server.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_10) "Linking CXX executable server"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/mnt/e/1.Manan/1.College/14.Projects/OptimizedWebServer/http_server/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_12) "Linking CXX executable server"
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/server.dir/link.txt --verbose=$(VERBOSE)
 
 # Rule to build all files generated by this target.
