@@ -287,11 +287,18 @@ def test_multiplayer_isolation_and_disconnection():
     
     assert p1_id != p2_id, f"Both players assigned identical ID {p1_id}"
     
-    # Read snapshot from s1: must contain BOTH players
-    time.sleep(0.1)
-    snap = read_next_snapshot(s1)
-    p_ids = [p["id"] for p in snap["players"]]
-    assert p1_id in p_ids and p2_id in p_ids, f"Expected both {p1_id} and {p2_id} in snapshot, got {p_ids}"
+    # Read snapshot from s1: wait until it contains BOTH players
+    start_wait = time.time()
+    found_both = False
+    p_ids = []
+    while time.time() - start_wait < 2.0:
+        snap = read_next_snapshot(s1, timeout=0.5)
+        if snap:
+            p_ids = [p["id"] for p in snap["players"]]
+            if p1_id in p_ids and p2_id in p_ids:
+                found_both = True
+                break
+    assert found_both, f"Expected both {p1_id} and {p2_id} in snapshot, got {p_ids}"
     
     # Send throttle ONLY to player 1
     for i in range(12):
