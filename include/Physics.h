@@ -1,6 +1,10 @@
 #pragma once
 
+#include <vector>
+#include <unordered_map>
+#include <cstdint>
 #include "Player.h"
+#include "Track.h"
 
 namespace physics {
 
@@ -21,7 +25,30 @@ struct Config {
     static constexpr uint32_t TICKS_PER_SNAPSHOT= TICK_RATE / SNAPSHOT_RATE; // 3 ticks
 };
 
-// Advances a player's physical state by dt seconds given current inputs
-void updateVehicle(PlayerState& player, const Controls& controls, double dt);
+struct CollisionConfig {
+    static constexpr double CAR_LENGTH            = 4.2;   // meters
+    static constexpr double CAR_WIDTH             = 2.0;   // meters
+    static constexpr double COLLISION_RADIUS      = 1.5;   // Collision circle radius in meters
+    static constexpr double MIN_SEPARATION_DIST   = 2.0 * COLLISION_RADIUS; // 3.0 meters
+    static constexpr double RESTITUTION           = 0.35;  // Collision bounciness
+    static constexpr double COLLISION_SPEED_SCRUB = 0.08;  // 8% kinetic energy scrub on collision
+    static constexpr double MAX_IMPULSE_SPEED     = 40.0;  // km/h max impulse velocity change
+};
+
+struct CollisionEvent {
+    uint32_t player1Id = 0;
+    uint32_t player2Id = 0;
+    double relativeSpeed = 0.0;
+    double penetration = 0.0;
+};
+
+// Advances a player's physical state by dt seconds given current inputs along curved track
+void updateVehicle(PlayerState& player, const Controls& controls, double dt,
+                   const track::Track& track = track::getDefaultTrack());
+
+// Resolves authoritative vehicle-to-vehicle collisions within a single room
+void resolveRoomCollisions(std::unordered_map<uint32_t, PlayerState>& vehicles,
+                           const track::Track& track = track::getDefaultTrack(),
+                           std::vector<CollisionEvent>* outEvents = nullptr);
 
 } // namespace physics

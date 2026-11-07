@@ -215,6 +215,12 @@ void SimulationThread::runLoop() {
                 if (rid != 0 && allFinished) {
                     rsim.state = RoomState::FINISHED;
                 }
+
+                // Resolve authoritative vehicle-to-vehicle collisions within this room
+                physics::resolveRoomCollisions(rsim.vehicles, track::getDefaultTrack());
+            } else if (rid == 0 && !rsim.vehicles.empty()) {
+                // Practice mode: resolve collisions between practice drivers
+                physics::resolveRoomCollisions(rsim.vehicles, track::getDefaultTrack());
             }
         }
 
@@ -245,6 +251,9 @@ void SimulationThread::runLoop() {
                     ps.distance = player.distance;
                     ps.speed = player.speed;
                     ps.steer = player.steerAngle;
+                    ps.worldX = player.worldX;
+                    ps.worldY = player.worldY;
+                    ps.heading = player.heading;
                     snapshot.players.push_back(ps);
                 }
 
