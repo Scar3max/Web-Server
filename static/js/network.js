@@ -224,12 +224,12 @@ export class NetworkManager {
 
     sendInput(controls, force = false) {
         if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-            return;
+            return null;
         }
 
         const now = performance.now();
         if (!force && (now - this.lastSendTime < this.sendInterval)) {
-            return;
+            return null;
         }
         this.lastSendTime = now;
 
@@ -246,6 +246,7 @@ export class NetworkManager {
         };
 
         this.socket.send(JSON.stringify(packet));
+        return this.seq;
     }
 
     updateStatus(state, label) {
