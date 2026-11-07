@@ -37,9 +37,10 @@ public:
     std::string wsMessageBuffer;
 
     // Buffer limits
-    static constexpr size_t MAX_HEADER_SIZE = 8192;            // 8 KB
-    static constexpr size_t MAX_BODY_SIZE   = 10 * 1024 * 1024; // 10 MB
-    static constexpr size_t MAX_BUFFER_SIZE = MAX_HEADER_SIZE + MAX_BODY_SIZE;
+    static constexpr size_t MAX_HEADER_SIZE      = 8192;             // 8 KB
+    static constexpr size_t MAX_BODY_SIZE        = 10 * 1024 * 1024; // 10 MB
+    static constexpr size_t MAX_BUFFER_SIZE      = MAX_HEADER_SIZE + MAX_BODY_SIZE;
+    static constexpr size_t MAX_WS_MESSAGE_SIZE  = 10 * 1024 * 1024; // 10 MB max assembled WS message
 
     enum class ParseResult {
         INCOMPLETE,

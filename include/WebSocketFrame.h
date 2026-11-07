@@ -23,7 +23,8 @@ public:
     static constexpr uint16_t CLOSE_POLICY_VIOLATION  = 1008;
     static constexpr uint16_t CLOSE_MESSAGE_TOO_BIG   = 1009;
 
-    static constexpr size_t MAX_FRAME_SIZE = 10 * 1024 * 1024; // 10 MB payload limit
+    static constexpr size_t MAX_FRAME_SIZE   = 10 * 1024 * 1024; // 10 MB per-frame limit
+    static constexpr size_t MAX_MESSAGE_SIZE = 10 * 1024 * 1024; // 10 MB assembled message limit
 
     enum class ParseStatus {
         NEED_MORE_DATA,

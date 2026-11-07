@@ -135,9 +135,9 @@ WebSocketFrame::ParseStatus WebSocketFrame::parseFrame(
         if (payloadLen >= 2) {
             uint16_t code = (static_cast<uint8_t>(outFrame.payload[0]) << 8) |
                              static_cast<uint8_t>(outFrame.payload[1]);
-            // Validate code values
+            // Validate code values per RFC 6455 7.4
             if (code < 1000 || code == 1004 || code == 1005 || code == 1006 ||
-                (code >= 1015 && code <= 2999)) {
+                (code >= 1015 && code <= 2999) || code >= 5000) {
                 closeCode = CLOSE_PROTOCOL_ERROR;
                 return ParseStatus::PROTOCOL_ERROR;
             }

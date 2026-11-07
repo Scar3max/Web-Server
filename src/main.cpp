@@ -314,12 +314,13 @@ int main() {
                 }
 
                 Connection& conn = it->second;
+                int clientSocketFd = currentFd;
 
                 // Handle peer hangup or errors
                 if (currentEvents & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
                     // If no pending output to write, close immediately
                     if (conn.bytesSent >= conn.outBuffer.size()) {
-                        closeConnection(conn.fd, epollFd, connections);
+                        closeConnection(clientSocketFd, epollFd, connections);
                         continue;
                     }
                 }
@@ -329,7 +330,7 @@ int main() {
                     if (conn.bytesSent < conn.outBuffer.size()) {
                         bool sockErr = flushSendBuffer(conn);
                         if (sockErr) {
-                            closeConnection(conn.fd, epollFd, connections);
+                            closeConnection(clientSocketFd, epollFd, connections);
                             continue;
                         }
 
@@ -339,14 +340,14 @@ int main() {
                             conn.bytesSent = 0;
 
                             if (conn.shouldClose) {
-                                closeConnection(conn.fd, epollFd, connections);
+                                closeConnection(clientSocketFd, epollFd, connections);
                                 continue;
                             } else {
                                 // Remove EPOLLOUT, keep listening for readable data
                                 epoll_event ev{};
                                 ev.events = EPOLLIN | EPOLLRDHUP;
-                                ev.data.fd = conn.fd;
-                                epoll_ctl(epollFd, EPOLL_CTL_MOD, conn.fd, &ev);
+                                ev.data.fd = clientSocketFd;
+                                epoll_ctl(epollFd, EPOLL_CTL_MOD, clientSocketFd, &ev);
                             }
                         }
                     }
@@ -384,7 +385,7 @@ int main() {
                     }
 
                     if (disconnected) {
-                        closeConnection(conn.fd, epollFd, connections);
+                        closeConnection(clientSocketFd, epollFd, connections);
                         continue;
                     }
 
@@ -412,7 +413,7 @@ int main() {
 
                                     bool sockErr = flushSendBuffer(conn);
                                     if (sockErr) {
-                                        closeConnection(conn.fd, epollFd, connections);
+                                        closeConnection(clientSocketFd, epollFd, connections);
                                         continue;
                                     }
 
@@ -421,13 +422,13 @@ int main() {
                                         conn.bytesSent = 0;
                                         epoll_event ev{};
                                         ev.events = EPOLLIN | EPOLLRDHUP;
-                                        ev.data.fd = conn.fd;
-                                        epoll_ctl(epollFd, EPOLL_CTL_MOD, conn.fd, &ev);
+                                        ev.data.fd = clientSocketFd;
+                                        epoll_ctl(epollFd, EPOLL_CTL_MOD, clientSocketFd, &ev);
                                     } else {
                                         epoll_event ev{};
                                         ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
-                                        ev.data.fd = conn.fd;
-                                        epoll_ctl(epollFd, EPOLL_CTL_MOD, conn.fd, &ev);
+                                        ev.data.fd = clientSocketFd;
+                                        epoll_ctl(epollFd, EPOLL_CTL_MOD, clientSocketFd, &ev);
                                     }
                                 } else {
                                     // Handshake rejected with appropriate HTTP error
@@ -438,12 +439,12 @@ int main() {
 
                                     flushSendBuffer(conn);
                                     if (conn.bytesSent >= conn.outBuffer.size()) {
-                                        closeConnection(conn.fd, epollFd, connections);
+                                        closeConnection(clientSocketFd, epollFd, connections);
                                     } else {
                                         epoll_event ev{};
                                         ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
-                                        ev.data.fd = conn.fd;
-                                        epoll_ctl(epollFd, EPOLL_CTL_MOD, conn.fd, &ev);
+                                        ev.data.fd = clientSocketFd;
+                                        epoll_ctl(epollFd, EPOLL_CTL_MOD, clientSocketFd, &ev);
                                     }
                                 }
                             } else {
@@ -453,30 +454,30 @@ int main() {
                                 // Temporarily disable EPOLLIN while request is being processed
                                 epoll_event ev{};
                                 ev.events = EPOLLRDHUP;
-                                ev.data.fd = conn.fd;
-                                epoll_ctl(epollFd, EPOLL_CTL_MOD, conn.fd, &ev);
+                                ev.data.fd = clientSocketFd;
+                                epoll_ctl(epollFd, EPOLL_CTL_MOD, clientSocketFd, &ev);
 
                                 Task task;
                                 task.connectionId = conn.id;
-                                task.clientSocket = conn.fd;
+                                task.clientSocket = clientSocketFd;
                                 task.rawRequest = std::move(rawRequest);
                                 task.router = &router;
 
                                 taskQueue.push(std::move(task));
                             }
                         } else if (parseResult == Connection::ParseResult::TOO_LARGE) {
-                            sendImmediateError(conn.fd, 431, "Request Header Fields Too Large");
-                            closeConnection(conn.fd, epollFd, connections);
+                            sendImmediateError(clientSocketFd, 431, "Request Header Fields Too Large");
+                            closeConnection(clientSocketFd, epollFd, connections);
                             continue;
                         } else if (parseResult == Connection::ParseResult::BAD_REQUEST) {
-                            sendImmediateError(conn.fd, 400, "Bad Request");
-                            closeConnection(conn.fd, epollFd, connections);
+                            sendImmediateError(clientSocketFd, 400, "Bad Request");
+                            closeConnection(clientSocketFd, epollFd, connections);
                             continue;
                         }
                     }
                     // B. Protocol: WEBSOCKET (Incremental frame parsing & Echo Application)
                     else if (conn.protocol == ConnectionProtocol::WEBSOCKET) {
-                        bool fatalError = false;
+                        bool connectionClosed = false;
 
                         while (!conn.inBuffer.empty()) {
                             WebSocketFrame::Frame frame;
@@ -491,18 +492,19 @@ int main() {
                             if (status == WebSocketFrame::ParseStatus::PROTOCOL_ERROR) {
                                 string closeFrame = WebSocketFrame::encodeCloseFrame(closeCode, "Protocol Error");
                                 conn.outBuffer.append(closeFrame);
+                                conn.wsCloseSent = true;
                                 conn.shouldClose = true;
                                 flushSendBuffer(conn);
 
                                 if (conn.bytesSent >= conn.outBuffer.size()) {
-                                    closeConnection(conn.fd, epollFd, connections);
+                                    closeConnection(clientSocketFd, epollFd, connections);
                                 } else {
                                     epoll_event ev{};
                                     ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
-                                    ev.data.fd = conn.fd;
-                                    epoll_ctl(epollFd, EPOLL_CTL_MOD, conn.fd, &ev);
+                                    ev.data.fd = clientSocketFd;
+                                    epoll_ctl(epollFd, EPOLL_CTL_MOD, clientSocketFd, &ev);
                                 }
-                                fatalError = true;
+                                connectionClosed = true;
                                 break;
                             }
 
@@ -515,7 +517,7 @@ int main() {
                                 conn.outBuffer.append(pong);
                                 flushSendBuffer(conn);
                             } else if (frame.opcode == WebSocketFrame::OPCODE_PONG) {
-                                // Ignore unsolicited/solicited pong
+                                // Ignore unsolicited/solicited pong per RFC 6455
                             } else if (frame.opcode == WebSocketFrame::OPCODE_CLOSE) {
                                 conn.wsCloseReceived = true;
                                 if (!conn.wsCloseSent) {
@@ -528,14 +530,14 @@ int main() {
                                 flushSendBuffer(conn);
 
                                 if (conn.bytesSent >= conn.outBuffer.size()) {
-                                    closeConnection(conn.fd, epollFd, connections);
+                                    closeConnection(clientSocketFd, epollFd, connections);
                                 } else {
                                     epoll_event ev{};
                                     ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
-                                    ev.data.fd = conn.fd;
-                                    epoll_ctl(epollFd, EPOLL_CTL_MOD, conn.fd, &ev);
+                                    ev.data.fd = clientSocketFd;
+                                    epoll_ctl(epollFd, EPOLL_CTL_MOD, clientSocketFd, &ev);
                                 }
-                                fatalError = true;
+                                connectionClosed = true;
                                 break;
                             }
                             // Data Frames: Text
@@ -543,9 +545,19 @@ int main() {
                                 if (conn.wsInFragmentedMessage) {
                                     string closeFrame = WebSocketFrame::encodeCloseFrame(WebSocketFrame::CLOSE_PROTOCOL_ERROR, "Unexpected text frame");
                                     conn.outBuffer.append(closeFrame);
+                                    conn.wsCloseSent = true;
                                     conn.shouldClose = true;
                                     flushSendBuffer(conn);
-                                    fatalError = true;
+
+                                    if (conn.bytesSent >= conn.outBuffer.size()) {
+                                        closeConnection(clientSocketFd, epollFd, connections);
+                                    } else {
+                                        epoll_event ev{};
+                                        ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
+                                        ev.data.fd = clientSocketFd;
+                                        epoll_ctl(epollFd, EPOLL_CTL_MOD, clientSocketFd, &ev);
+                                    }
+                                    connectionClosed = true;
                                     break;
                                 }
 
@@ -557,9 +569,19 @@ int main() {
                                     if (!WebSocketFrame::isValidUtf8(frame.payload)) {
                                         string closeFrame = WebSocketFrame::encodeCloseFrame(WebSocketFrame::CLOSE_INVALID_PAYLOAD, "Invalid UTF-8");
                                         conn.outBuffer.append(closeFrame);
+                                        conn.wsCloseSent = true;
                                         conn.shouldClose = true;
                                         flushSendBuffer(conn);
-                                        fatalError = true;
+
+                                        if (conn.bytesSent >= conn.outBuffer.size()) {
+                                            closeConnection(clientSocketFd, epollFd, connections);
+                                        } else {
+                                            epoll_event ev{};
+                                            ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
+                                            ev.data.fd = clientSocketFd;
+                                            epoll_ctl(epollFd, EPOLL_CTL_MOD, clientSocketFd, &ev);
+                                        }
+                                        connectionClosed = true;
                                         break;
                                     }
                                     // Echo back text frame
@@ -573,9 +595,39 @@ int main() {
                                 if (!conn.wsInFragmentedMessage) {
                                     string closeFrame = WebSocketFrame::encodeCloseFrame(WebSocketFrame::CLOSE_PROTOCOL_ERROR, "Unexpected continuation");
                                     conn.outBuffer.append(closeFrame);
+                                    conn.wsCloseSent = true;
                                     conn.shouldClose = true;
                                     flushSendBuffer(conn);
-                                    fatalError = true;
+
+                                    if (conn.bytesSent >= conn.outBuffer.size()) {
+                                        closeConnection(clientSocketFd, epollFd, connections);
+                                    } else {
+                                        epoll_event ev{};
+                                        ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
+                                        ev.data.fd = clientSocketFd;
+                                        epoll_ctl(epollFd, EPOLL_CTL_MOD, clientSocketFd, &ev);
+                                    }
+                                    connectionClosed = true;
+                                    break;
+                                }
+
+                                // Enforce maximum assembled message size
+                                if (conn.wsMessageBuffer.size() + frame.payload.size() > Connection::MAX_WS_MESSAGE_SIZE) {
+                                    string closeFrame = WebSocketFrame::encodeCloseFrame(WebSocketFrame::CLOSE_MESSAGE_TOO_BIG, "Message too big");
+                                    conn.outBuffer.append(closeFrame);
+                                    conn.wsCloseSent = true;
+                                    conn.shouldClose = true;
+                                    flushSendBuffer(conn);
+
+                                    if (conn.bytesSent >= conn.outBuffer.size()) {
+                                        closeConnection(clientSocketFd, epollFd, connections);
+                                    } else {
+                                        epoll_event ev{};
+                                        ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
+                                        ev.data.fd = clientSocketFd;
+                                        epoll_ctl(epollFd, EPOLL_CTL_MOD, clientSocketFd, &ev);
+                                    }
+                                    connectionClosed = true;
                                     break;
                                 }
 
@@ -586,21 +638,59 @@ int main() {
                                         if (!WebSocketFrame::isValidUtf8(conn.wsMessageBuffer)) {
                                             string closeFrame = WebSocketFrame::encodeCloseFrame(WebSocketFrame::CLOSE_INVALID_PAYLOAD, "Invalid UTF-8");
                                             conn.outBuffer.append(closeFrame);
+                                            conn.wsCloseSent = true;
                                             conn.shouldClose = true;
                                             flushSendBuffer(conn);
-                                            fatalError = true;
+
+                                            if (conn.bytesSent >= conn.outBuffer.size()) {
+                                                closeConnection(clientSocketFd, epollFd, connections);
+                                            } else {
+                                                epoll_event ev{};
+                                                ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
+                                                ev.data.fd = clientSocketFd;
+                                                epoll_ctl(epollFd, EPOLL_CTL_MOD, clientSocketFd, &ev);
+                                            }
+                                            connectionClosed = true;
                                             break;
                                         }
                                         string echoFrame = WebSocketFrame::encodeTextFrame(conn.wsMessageBuffer);
                                         conn.outBuffer.append(echoFrame);
                                         flushSendBuffer(conn);
+                                    } else if (conn.wsFragmentedOpcode == WebSocketFrame::OPCODE_BINARY) {
+                                        string echoFrame = WebSocketFrame::encodeFrame(WebSocketFrame::OPCODE_BINARY, conn.wsMessageBuffer, true);
+                                        conn.outBuffer.append(echoFrame);
+                                        flushSendBuffer(conn);
                                     }
                                     conn.wsMessageBuffer.clear();
+                                    conn.wsFragmentedOpcode = 0;
                                 }
                             }
                             // Data Frames: Binary
                             else if (frame.opcode == WebSocketFrame::OPCODE_BINARY) {
-                                if (frame.fin) {
+                                if (conn.wsInFragmentedMessage) {
+                                    string closeFrame = WebSocketFrame::encodeCloseFrame(WebSocketFrame::CLOSE_PROTOCOL_ERROR, "Unexpected binary frame in fragmented message");
+                                    conn.outBuffer.append(closeFrame);
+                                    conn.wsCloseSent = true;
+                                    conn.shouldClose = true;
+                                    flushSendBuffer(conn);
+
+                                    if (conn.bytesSent >= conn.outBuffer.size()) {
+                                        closeConnection(clientSocketFd, epollFd, connections);
+                                    } else {
+                                        epoll_event ev{};
+                                        ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
+                                        ev.data.fd = clientSocketFd;
+                                        epoll_ctl(epollFd, EPOLL_CTL_MOD, clientSocketFd, &ev);
+                                    }
+                                    connectionClosed = true;
+                                    break;
+                                }
+
+                                if (!frame.fin) {
+                                    conn.wsInFragmentedMessage = true;
+                                    conn.wsFragmentedOpcode = WebSocketFrame::OPCODE_BINARY;
+                                    conn.wsMessageBuffer = frame.payload;
+                                } else {
                                     string echoFrame = WebSocketFrame::encodeFrame(WebSocketFrame::OPCODE_BINARY, frame.payload, true);
                                     conn.outBuffer.append(echoFrame);
                                     flushSendBuffer(conn);
@@ -608,19 +698,16 @@ int main() {
                             }
                         }
 
-                        if (fatalError) {
-                            if (connections.find(conn.fd) != connections.end() && conn.bytesSent >= conn.outBuffer.size()) {
-                                closeConnection(conn.fd, epollFd, connections);
-                            }
+                        if (connectionClosed) {
                             continue;
                         }
 
-                        // Register EPOLLOUT if data is queued in outBuffer
+                        // Register EPOLLOUT if data remains queued in outBuffer
                         if (conn.bytesSent < conn.outBuffer.size()) {
                             epoll_event ev{};
                             ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
-                            ev.data.fd = conn.fd;
-                            epoll_ctl(epollFd, EPOLL_CTL_MOD, conn.fd, &ev);
+                            ev.data.fd = clientSocketFd;
+                            epoll_ctl(epollFd, EPOLL_CTL_MOD, clientSocketFd, &ev);
                         } else if (!conn.outBuffer.empty()) {
                             conn.outBuffer.clear();
                             conn.bytesSent = 0;

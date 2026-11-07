@@ -3,14 +3,13 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
-#include <dlfcn.h>
 #include <vector>
 
 namespace {
 
 const char* WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
-// Fallback RFC 3174 SHA-1 implementation
+// Standard RFC 3174 SHA-1 implementation
 uint32_t sha1_rol(uint32_t value, size_t bits) {
     return (value << bits) | (value >> (32 - bits));
 }
@@ -94,7 +93,7 @@ std::vector<uint8_t> sha1_digest(const std::string& input) {
     return digest;
 }
 
-// Fallback Base64 encoder
+// Standard RFC 4648 Base64 encoder
 std::string base64_encode(const uint8_t* data, size_t len) {
     static const char* tbl = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     std::string out;
@@ -150,39 +149,30 @@ bool WebSocketHandshake::isUpgradeRequest(const std::string& rawRequest) {
            (lower.find("websocket") != std::string::npos);
 }
 
+bool WebSocketHandshake::isValidKey(const std::string& key) {
+    // RFC 6455 4.1: Sec-WebSocket-Key must be 16-byte nonce base64-encoded (24 chars ending in '==')
+    if (key.size() != 24) return false;
+    if (key[22] != '=' || key[23] != '=') return false;
+
+    static const std::string b64chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    for (size_t i = 0; i < 22; i++) {
+        if (b64chars.find(key[i]) == std::string::npos) {
+            return false;
+        }
+    }
+
+    // Index 21 encodes the final 2 bits of the 16th byte, so its lower 4 bits must be zero.
+    // In Base64, this restricts character 21 to: 'A' (0), 'Q' (16), 'g' (32), 'w' (48).
+    char c = key[21];
+    if (c != 'A' && c != 'Q' && c != 'g' && c != 'w') {
+        return false;
+    }
+
+    return true;
+}
+
 std::string WebSocketHandshake::computeAcceptKey(const std::string& clientKey) {
     std::string combined = clientKey + WEBSOCKET_GUID;
-
-    // Try OpenSSL dynamically from libcrypto.so.3 / libcrypto.so
-    typedef unsigned char* (*SHA1_Func)(const unsigned char*, size_t, unsigned char*);
-    typedef int (*EVP_EncodeBlock_Func)(unsigned char*, const unsigned char*, int);
-
-    static void* cryptoHandle = nullptr;
-    static SHA1_Func sha1_ptr = nullptr;
-    static EVP_EncodeBlock_Func encode_ptr = nullptr;
-    static bool checkedOpenSSL = false;
-
-    if (!checkedOpenSSL) {
-        checkedOpenSSL = true;
-        cryptoHandle = dlopen("libcrypto.so.3", RTLD_LAZY);
-        if (!cryptoHandle) {
-            cryptoHandle = dlopen("libcrypto.so", RTLD_LAZY);
-        }
-        if (cryptoHandle) {
-            sha1_ptr = reinterpret_cast<SHA1_Func>(dlsym(cryptoHandle, "SHA1"));
-            encode_ptr = reinterpret_cast<EVP_EncodeBlock_Func>(dlsym(cryptoHandle, "EVP_EncodeBlock"));
-        }
-    }
-
-    if (sha1_ptr && encode_ptr) {
-        unsigned char md[20];
-        sha1_ptr(reinterpret_cast<const unsigned char*>(combined.data()), combined.size(), md);
-        unsigned char b64[32] = {0};
-        encode_ptr(b64, md, 20);
-        return reinterpret_cast<char*>(b64);
-    }
-
-    // High-performance RFC 3174 fallback
     std::vector<uint8_t> digest = sha1_digest(combined);
     return base64_encode(digest.data(), digest.size());
 }
@@ -212,7 +202,8 @@ WebSocketHandshake::HandshakeResult WebSocketHandshake::validateHandshake(
         return HandshakeResult::METHOD_NOT_ALLOWED;
     }
 
-    if (version != "HTTP/1.1" && version != "HTTP/2" && version != "HTTP/2.0") {
+    // RFC 6455 requires HTTP/1.1
+    if (version != "HTTP/1.1") {
         responseText = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n";
         return HandshakeResult::BAD_REQUEST;
     }
@@ -225,7 +216,7 @@ WebSocketHandshake::HandshakeResult WebSocketHandshake::validateHandshake(
         return HandshakeResult::NOT_FOUND;
     }
 
-    // Parse headers (case-insensitive keys)
+    // Parse headers (case-insensitive keys; merge duplicate headers with comma per RFC 7230)
     std::unordered_map<std::string, std::string> headers;
     std::string headerLine;
     while (std::getline(stream, headerLine) && headerLine != "\r" && !headerLine.empty()) {
@@ -236,7 +227,11 @@ WebSocketHandshake::HandshakeResult WebSocketHandshake::validateHandshake(
         if (colon != std::string::npos) {
             std::string name = toLower(trim(headerLine.substr(0, colon)));
             std::string value = trim(headerLine.substr(colon + 1));
-            headers[name] = value;
+            if (headers.find(name) != headers.end()) {
+                headers[name] += ", " + value;
+            } else {
+                headers[name] = value;
+            }
         }
     }
 
@@ -247,7 +242,7 @@ WebSocketHandshake::HandshakeResult WebSocketHandshake::validateHandshake(
         return HandshakeResult::BAD_REQUEST;
     }
 
-    // Validate Connection: Upgrade token
+    // Validate Connection: Upgrade token (handles comma-separated tokens)
     auto connIt = headers.find("connection");
     if (connIt == headers.end() || !tokenListContains(connIt->second, "upgrade")) {
         responseText = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nMissing or invalid Connection header";
@@ -266,8 +261,8 @@ WebSocketHandshake::HandshakeResult WebSocketHandshake::validateHandshake(
 
     // Validate Sec-WebSocket-Key
     auto keyIt = headers.find("sec-websocket-key");
-    if (keyIt == headers.end() || keyIt->second.empty()) {
-        responseText = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nMissing Sec-WebSocket-Key";
+    if (keyIt == headers.end() || !isValidKey(keyIt->second)) {
+        responseText = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nInvalid Sec-WebSocket-Key";
         return HandshakeResult::BAD_REQUEST;
     }
 

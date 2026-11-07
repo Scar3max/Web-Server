@@ -29,7 +29,13 @@ python3 tests/test_phase2_ws.py
 
 echo ""
 echo "=================================================="
-echo "3. Running ApacheBench Concurrency Regression Test"
+echo "3. Running Phase 2.1 Security & Correctness Audit Tests"
+echo "=================================================="
+python3 tests/test_phase2_audit.py
+
+echo ""
+echo "=================================================="
+echo "4. Running ApacheBench Concurrency Regression Test"
 echo "=================================================="
 ab -n 5000 -c 50 http://127.0.0.1:8080/
 
