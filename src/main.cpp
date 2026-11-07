@@ -37,6 +37,7 @@
 #include "Room.h"
 #include "RoomManager.h"
 #include "RoomProtocol.h"
+#include "ServerMetrics.h"
 
 using namespace std;
 
@@ -90,6 +91,7 @@ static void closeConnection(int fd, int epollFd,
 
 // Sends an immediate HTTP error response from the event loop
 static void sendImmediateError(int fd, int statusCode, const string& reason) {
+    ServerMetrics::instance().recordHttpRequest(statusCode);
     string body = "<h1>" + to_string(statusCode) + " " + reason + "</h1>";
     string response = "HTTP/1.1 " + to_string(statusCode) + " " + reason + "\r\n"
                     + "Content-Type: text/html\r\n"
@@ -109,13 +111,20 @@ static bool flushSendBuffer(Connection& conn) {
 
         if (sent > 0) {
             conn.bytesSent += sent;
+            ServerMetrics::instance().recordBytesTransmitted(sent);
+            ServerMetrics::instance().recordOutputBufferSize(conn.outBuffer.size() - conn.bytesSent);
+            if (static_cast<size_t>(sent) < remaining) {
+                ServerMetrics::instance().recordPartialWrite();
+            }
         } else if (sent < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                ServerMetrics::instance().recordEagain();
                 return false;
             }
             if (errno == EINTR) {
                 continue;
             }
+            ServerMetrics::instance().recordConnectionDrop();
             return true;
         } else {
             break;
@@ -129,9 +138,11 @@ static bool flushSendBuffer(Connection& conn) {
 // Returns true on success/EAGAIN, false on fatal socket error or memory limit violation.
 static bool sendWebSocketFrameSafe(Connection& conn, int epollFd, const string& frame, size_t maxBufferSize = Connection::MAX_OUT_BUFFER_SIZE) {
     if (conn.outBuffer.size() + frame.size() > maxBufferSize) {
+        ServerMetrics::instance().backpressureControlFrameCongestionTotal.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
     conn.outBuffer.append(frame);
+    ServerMetrics::instance().wsFramesSentTotal.fetch_add(1, std::memory_order_relaxed);
     bool sockErr = flushSendBuffer(conn);
     if (sockErr) {
         return false;
@@ -224,6 +235,10 @@ static void closeConnection(int fd, int epollFd,
     removePlayerIfPresent(fd, epollFd, connections, socketToPlayer, playerToSocket, playerLastSeq, playerLastTime, inputQueue, roomManager);
     auto it = connections.find(fd);
     if (it != connections.end()) {
+        ServerMetrics::instance().recordTcpClose();
+        if (it->second.protocol == ConnectionProtocol::WEBSOCKET) {
+            ServerMetrics::instance().recordWebSocketClose();
+        }
         epoll_ctl(epollFd, EPOLL_CTL_DEL, fd, nullptr);
         close(fd);
         connections.erase(it);
@@ -641,31 +656,35 @@ int main() {
     SimulationThread simulationThread(inputQueue, snapshotQueue);
     RoomManager roomManager;
 
-    router.addRoute("/metrics", [&simulationThread, &roomManager]() -> HttpResponse {
+    router.addRoute("/metrics", [](const HttpRequest& req) -> HttpResponse {
         HttpResponse res;
         res.status = 200;
-        res.contentType = "application/json";
 
-        std::ostringstream oss;
-        oss << "{"
-            << "\"tick\":" << simulationThread.getTick() << ","
-            << "\"tickRate\":" << std::fixed << std::setprecision(2) << simulationThread.getTickRate() << ","
-            << "\"snapshotRate\":" << std::fixed << std::setprecision(2) << simulationThread.getSnapshotRate() << ","
-            << "\"activePlayers\":" << simulationThread.getPlayerCount() << ","
-            << "\"roomCount\":" << roomManager.getRoomCount() << ","
-            << "\"totalSnapshotsPublished\":" << simulationThread.getTotalSnapshots() << ","
-            << "\"inputQueueLifecycleSize\":" << simulationThread.getInputQueue().getLifecycleQueueSize() << ","
-            << "\"inputQueueHighWaterEvents\":" << simulationThread.getInputQueue().getHighWaterEvents() << ","
-            << "\"inputQueueHighWaterInputs\":" << simulationThread.getInputQueue().getHighWaterInputs() << ","
-            << "\"totalJoinsAttempted\":" << simulationThread.getInputQueue().getTotalJoinsAttempted() << ","
-            << "\"totalJoinsAdmitted\":" << simulationThread.getInputQueue().getTotalJoinsAdmitted() << ","
-            << "\"totalJoinsRejected\":" << simulationThread.getInputQueue().getTotalJoinsRejected() << ","
-            << "\"totalLeavesPushed\":" << simulationThread.getInputQueue().getTotalLeavesPushed() << ","
-            << "\"snapshotQueueHighWater\":" << simulationThread.getSnapshotQueue().getHighWaterMark() << ","
-            << "\"snapshotQueueTotalDropped\":" << simulationThread.getSnapshotQueue().getTotalDropped()
-            << "}";
+        bool wantsJson = (req.query.find("format=json") != std::string::npos ||
+                          req.accept.find("application/json") != std::string::npos ||
+                          req.userAgent.find("Python-urllib") != std::string::npos);
 
-        res.body = oss.str();
+        if (req.query.find("format=prometheus") != std::string::npos ||
+            req.path == "/prometheus" ||
+            req.path == "/metrics.prom") {
+            wantsJson = false;
+        }
+
+        if (wantsJson) {
+            res.contentType = "application/json; charset=utf-8";
+            res.body = ServerMetrics::instance().toJson();
+        } else {
+            res.contentType = "text/plain; version=0.0.4; charset=utf-8";
+            res.body = ServerMetrics::instance().toPrometheusText();
+        }
+        return res;
+    });
+
+    router.addRoute("/prometheus", [](const HttpRequest&) -> HttpResponse {
+        HttpResponse res;
+        res.status = 200;
+        res.contentType = "text/plain; version=0.0.4; charset=utf-8";
+        res.body = ServerMetrics::instance().toPrometheusText();
         return res;
     });
 
@@ -846,6 +865,12 @@ int main() {
                 vector<int> slowClientsToDisconnect;
 
                 for (const auto& snap : snapshots) {
+                    for (const auto& p : snap.players) {
+                        if (p.ackSeq > 0) {
+                            ServerMetrics::instance().backpressureInputAcksTotal.fetch_add(1, std::memory_order_relaxed);
+                        }
+                    }
+
                     string jsonStr = snap.toJson();
                     string frame = WebSocketFrame::encodeTextFrame(jsonStr);
 
@@ -861,7 +886,9 @@ int main() {
 
                                     if (socketBlocked || bufferTooLarge) {
                                         playerConn.consecutiveDroppedSnapshots++;
+                                        ServerMetrics::instance().backpressureSnapshotDropsTotal.fetch_add(1, std::memory_order_relaxed);
                                         if (playerConn.consecutiveDroppedSnapshots >= Connection::MAX_CONSECUTIVE_DROPPED_SNAPSHOTS) {
+                                            ServerMetrics::instance().backpressureSlowClientDisconnectsTotal.fetch_add(1, std::memory_order_relaxed);
                                             slowClientsToDisconnect.push_back(sockFd);
                                         }
                                         continue;
@@ -869,6 +896,7 @@ int main() {
 
                                     playerConn.consecutiveDroppedSnapshots = 0;
                                     playerConn.outBuffer.append(frame);
+                                    ServerMetrics::instance().wsFramesSentTotal.fetch_add(1, std::memory_order_relaxed);
                                     bool sockErr = flushSendBuffer(playerConn);
                                     if (sockErr) {
                                         slowClientsToDisconnect.push_back(sockFd);
@@ -903,6 +931,7 @@ int main() {
                         } else if (room->state == RoomState::RACING && snap.roomState == RoomState::FINISHED) {
                             room->state = RoomState::FINISHED;
                             room->results = snap.results;
+                            ServerMetrics::instance().multiplayerRaceCompletionsTotal.fetch_add(1, std::memory_order_relaxed);
                             string finishedMsg = WebSocketFrame::encodeTextFrame(RoomProtocol::makeRaceFinished(*room));
                             for (const auto& [pid, m] : room->members) {
                                 auto cIt = connections.find(m.socketFd);
@@ -923,7 +952,9 @@ int main() {
 
                                 if (socketBlocked || bufferTooLarge) {
                                     playerConn.consecutiveDroppedSnapshots++;
+                                    ServerMetrics::instance().backpressureSnapshotDropsTotal.fetch_add(1, std::memory_order_relaxed);
                                     if (playerConn.consecutiveDroppedSnapshots >= Connection::MAX_CONSECUTIVE_DROPPED_SNAPSHOTS) {
+                                        ServerMetrics::instance().backpressureSlowClientDisconnectsTotal.fetch_add(1, std::memory_order_relaxed);
                                         slowClientsToDisconnect.push_back(sockFd);
                                     }
                                     continue;
@@ -931,6 +962,7 @@ int main() {
 
                                 playerConn.consecutiveDroppedSnapshots = 0;
                                 playerConn.outBuffer.append(frame);
+                                ServerMetrics::instance().wsFramesSentTotal.fetch_add(1, std::memory_order_relaxed);
                                 bool sockErr = flushSendBuffer(playerConn);
                                 if (sockErr) {
                                     slowClientsToDisconnect.push_back(sockFd);
@@ -976,6 +1008,7 @@ int main() {
                         continue;
                     }
                     fcntl(clientSocket, F_SETFL, flags | O_NONBLOCK);
+                    ServerMetrics::instance().recordTcpAccept();
 
                     Connection conn(clientSocket, nextConnectionId++);
                     connections[clientSocket] = std::move(conn);
@@ -1043,6 +1076,7 @@ int main() {
 
                         if (bytes > 0) {
                             conn.inBuffer.append(buffer, bytes);
+                            ServerMetrics::instance().recordBytesReceived(bytes);
                             if (conn.inBuffer.size() > Connection::MAX_BUFFER_SIZE) {
                                 if (conn.protocol == ConnectionProtocol::HTTP) {
                                     sendImmediateError(conn.fd, 413, "Payload Too Large");
@@ -1055,11 +1089,13 @@ int main() {
                             break;
                         } else {
                             if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                                ServerMetrics::instance().recordEagain();
                                 break;
                             }
                             if (errno == EINTR) {
                                 continue;
                             }
+                            ServerMetrics::instance().recordConnectionDrop();
                             disconnected = true;
                             break;
                         }
@@ -1085,6 +1121,7 @@ int main() {
 
                                 if (hsResult == WebSocketHandshake::HandshakeResult::SUCCESS) {
                                     conn.protocol = ConnectionProtocol::WEBSOCKET;
+                                    ServerMetrics::instance().recordWebSocketUpgrade();
                                     int sndbuf = 8192; // Bounded socket send buffer for responsive backpressure
                                     setsockopt(conn.fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
                                     conn.shouldClose = false;
@@ -1167,6 +1204,7 @@ int main() {
                             }
 
                             if (status == WebSocketFrame::ParseStatus::PROTOCOL_ERROR) {
+                                ServerMetrics::instance().wsProtocolErrorsTotal.fetch_add(1, std::memory_order_relaxed);
                                 string closeFrame = WebSocketFrame::encodeCloseFrame(closeCode, "Protocol Error");
                                 conn.outBuffer.append(closeFrame);
                                 conn.wsCloseSent = true;
@@ -1186,6 +1224,7 @@ int main() {
                             }
 
                             conn.inBuffer.erase(0, bytesConsumed);
+                            ServerMetrics::instance().wsFramesReceivedTotal.fetch_add(1, std::memory_order_relaxed);
 
                             // Control Frames
                             if (frame.opcode == WebSocketFrame::OPCODE_PING) {
@@ -1402,6 +1441,7 @@ int main() {
     }
 
     // Clean shutdown
+    auto shutdownStartTime = std::chrono::steady_clock::now();
     simulationThread.stop();
 
     for (auto& [fd, conn] : connections) {
@@ -1414,6 +1454,10 @@ int main() {
     close(wakeupFd);
     close(epollFd);
     close(serverSocket);
+
+    auto shutdownEndTime = std::chrono::steady_clock::now();
+    double shutdownDuration = std::chrono::duration<double>(shutdownEndTime - shutdownStartTime).count();
+    ServerMetrics::instance().serverShutdownDurationSeconds.store(shutdownDuration, std::memory_order_relaxed);
 
     Logger::log("Server shut down cleanly.");
     return 0;

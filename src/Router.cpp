@@ -9,6 +9,10 @@ void Router::addRoute(const string& path, function<HttpResponse()> handler) {
     routes[path] = handler;
 }
 
+void Router::addRoute(const string& path, function<HttpResponse(const HttpRequest&)> handler) {
+    requestRoutes[path] = handler;
+}
+
 void Router::addRoute(const string& path, function<string()> legacyHandler) {
     routes[path] = [legacyHandler]() -> HttpResponse {
         string body = legacyHandler();
@@ -17,13 +21,18 @@ void Router::addRoute(const string& path, function<string()> legacyHandler) {
 }
 
 HttpResponse Router::route(const string& path) {
-    // 1. Check explicit registered routes
+    auto reqIt = requestRoutes.find(path);
+    if (reqIt != requestRoutes.end()) {
+        HttpRequest req;
+        req.path = path;
+        return reqIt->second(req);
+    }
+
     auto it = routes.find(path);
     if (it != routes.end()) {
         return it->second();
     }
 
-    // 2. Try resolving as a static asset from staticDirectory
     string resolvedPath;
     if (FileManager::resolveSafePath(staticDirectory, path, resolvedPath)) {
         string fileData;
@@ -33,6 +42,28 @@ HttpResponse Router::route(const string& path) {
         }
     }
 
-    // 3. Fallback: 404 Not Found
+    return HttpResponse{404, "text/html; charset=utf-8", "<h1>404 Not Found</h1>"};
+}
+
+HttpResponse Router::route(const HttpRequest& request) {
+    auto reqIt = requestRoutes.find(request.path);
+    if (reqIt != requestRoutes.end()) {
+        return reqIt->second(request);
+    }
+
+    auto it = routes.find(request.path);
+    if (it != routes.end()) {
+        return it->second();
+    }
+
+    string resolvedPath;
+    if (FileManager::resolveSafePath(staticDirectory, request.path, resolvedPath)) {
+        string fileData;
+        if (FileManager::readFileBinary(resolvedPath, fileData)) {
+            string mime = FileManager::getMimeType(resolvedPath);
+            return HttpResponse{200, mime, std::move(fileData)};
+        }
+    }
+
     return HttpResponse{404, "text/html; charset=utf-8", "<h1>404 Not Found</h1>"};
 }

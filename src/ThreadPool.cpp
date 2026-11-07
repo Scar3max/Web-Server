@@ -2,6 +2,7 @@
 #include "HttpRequest.h"
 #include "HttpParser.h"
 #include "Router.h"
+#include "ServerMetrics.h"
 #include <string>
 
 using namespace std;
@@ -21,7 +22,8 @@ void ThreadPool::worker() {
         }
 
         HttpRequest request = parseRequest(task->rawRequest);
-        HttpResponse httpResp = task->router->route(request.path);
+        HttpResponse httpResp = task->router->route(request);
+        ServerMetrics::instance().recordHttpRequest(httpResp.status);
 
         string statusText = (httpResp.status == 200) ? "OK" :
                             (httpResp.status == 404 ? "Not Found" : "Error");
