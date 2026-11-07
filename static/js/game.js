@@ -1,5 +1,6 @@
 /**
- * Game — Controls local car simulation, delta-time game loop, and integration.
+ * Game — Consumes server-authoritative snapshots and drives
+ * smooth client-side interpolation and input streaming.
  */
 export class Game {
     constructor(canvas, inputManager, renderer, networkManager, uiElements) {
@@ -14,21 +15,30 @@ export class Game {
         this.lastTime = 0;
         this.animationFrameId = null;
 
-        // Vehicle & Simulation State
-        this.playerX = canvas.width / 2;
-        this.playerY = canvas.height * 0.75;
-        this.speed = 0;             // km/h
-        this.maxSpeed = 220;        // km/h
-        this.accelRate = 90;        // km/h per sec
-        this.brakeRate = 180;       // km/h per sec
-        this.friction = 25;         // Natural drag
-        this.steerSpeed = 320;      // px/sec at speed
-        this.steerAngle = 0;        // radians
-        this.maxSteerAngle = 0.14;  // ~8 degrees tilt
+        this.localPlayerId = null;
+        this.latestServerTick = 0;
 
-        this.roadOffset = 0;
-        this.distance = 0;          // meters
-        this.lapLength = 1500;      // meters
+        // Visual tracking for local player
+        this.localX = 0.0;          // Normalized [-1.0, 1.0]
+        this.localSpeed = 0.0;      // km/h
+        this.localDistance = 0.0;   // meters
+        this.localSteer = 0.0;      // radians
+        this.roadOffset = 0.0;
+
+        this.lapLength = 1500;      // meters per lap
+        this.pixelsPerMeter = 6.0;  // Visual scale for relative distance
+
+        // Player interpolation states: Map<id, { renderX, renderDist, renderSpeed, renderSteer, targetX, targetDist, targetSpeed, targetSteer, lastSeen }>
+        this.players = new Map();
+
+        // Wire network handlers
+        this.network.onWelcome = (playerId) => {
+            this.localPlayerId = playerId;
+        };
+
+        this.network.onSnapshot = (snapshot, rtt) => {
+            this.handleSnapshot(snapshot, rtt);
+        };
 
         // Wire pause toggle
         this.input.onPauseToggle = () => this.togglePause();
@@ -57,7 +67,46 @@ export class Game {
                 this.ui.overlay.classList.add('active');
             } else {
                 this.ui.overlay.classList.remove('active');
-                this.lastTime = performance.now(); // Avoid huge dt jump on resume
+                this.lastTime = performance.now();
+            }
+        }
+    }
+
+    handleSnapshot(snapshot, rtt) {
+        this.latestServerTick = snapshot.tick;
+
+        const activeIds = new Set();
+
+        for (const sp of snapshot.players) {
+            activeIds.add(sp.id);
+
+            let state = this.players.get(sp.id);
+            if (!state) {
+                state = {
+                    id: sp.id,
+                    renderX: sp.x,
+                    renderDist: sp.distance,
+                    renderSpeed: sp.speed,
+                    renderSteer: sp.steer,
+                    targetX: sp.x,
+                    targetDist: sp.distance,
+                    targetSpeed: sp.speed,
+                    targetSteer: sp.steer,
+                    controls: { up: false, down: false, left: false, right: false }
+                };
+                this.players.set(sp.id, state);
+            } else {
+                state.targetX = sp.x;
+                state.targetDist = sp.distance;
+                state.targetSpeed = sp.speed;
+                state.targetSteer = sp.steer;
+            }
+        }
+
+        // Clean up disconnected players
+        for (const [id] of this.players) {
+            if (!activeIds.has(id)) {
+                this.players.delete(id);
             }
         }
     }
@@ -78,60 +127,95 @@ export class Game {
     }
 
     update(dt) {
-        const controls = this.input.getState();
+        const rawControls = this.input.getState();
 
-        // Acceleration & Braking
-        if (controls.throttle) {
-            this.speed = Math.min(this.maxSpeed, this.speed + this.accelRate * dt);
-        } else if (controls.brake) {
-            this.speed = Math.max(0, this.speed - this.brakeRate * dt);
-        } else {
-            // Natural rolling resistance
-            this.speed = Math.max(0, this.speed - this.friction * dt);
+        // 1. Send authoritative input intention to server
+        const controls = {
+            up: rawControls.throttle,
+            down: rawControls.brake,
+            left: rawControls.left,
+            right: rawControls.right
+        };
+        this.network.sendInput(controls);
+
+        // 2. Smoothly interpolate all players towards latest authoritative server targets
+        const lerpFactor = Math.min(1.0, 18.0 * dt);
+
+        for (const [id, p] of this.players) {
+            p.renderX += (p.targetX - p.renderX) * lerpFactor;
+            p.renderDist += (p.targetDist - p.renderDist) * lerpFactor;
+            p.renderSpeed += (p.targetSpeed - p.renderSpeed) * lerpFactor;
+            p.renderSteer += (p.targetSteer - p.renderSteer) * lerpFactor;
+
+            if (id === this.localPlayerId) {
+                this.localX = p.renderX;
+                this.localDistance = p.renderDist;
+                this.localSpeed = p.renderSpeed;
+                this.localSteer = p.renderSteer;
+                p.controls = controls;
+            }
         }
 
-        // Steering (effective only when moving)
-        const speedFactor = Math.min(1.0, this.speed / 40);
-        let targetSteer = 0;
+        // 3. Drive road scroll offset from local authoritative speed
+        const worldSpeedMps = (this.localSpeed * 1000.0 / 3600.0);
+        this.roadOffset += worldSpeedMps * 12.0 * dt;
 
-        if (controls.left) {
-            this.playerX -= this.steerSpeed * speedFactor * dt;
-            targetSteer = -this.maxSteerAngle;
-        } else if (controls.right) {
-            this.playerX += this.steerSpeed * speedFactor * dt;
-            targetSteer = this.maxSteerAngle;
-        }
-
-        // Smooth steering tilt interpolation
-        this.steerAngle += (targetSteer - this.steerAngle) * 12 * dt;
-
-        // Keep car within road boundaries
-        const roadHalf = this.renderer.roadWidth / 2;
-        const roadCenter = this.renderer.width / 2;
-        const minX = roadCenter - roadHalf + 26;
-        const maxX = roadCenter + roadHalf - 26;
-        this.playerX = Math.max(minX, Math.min(maxX, this.playerX));
-
-        // Advance road scroll & distance
-        const worldSpeed = (this.speed * 1000 / 3600); // convert km/h to m/s
-        this.roadOffset += worldSpeed * 12 * dt;       // visual scroll multiplier
-        this.distance += worldSpeed * dt;
-
-        // Send telemetry through WebSocket echo channel
-        this.network.sendTelemetry(controls, this.speed, this.distance);
-
-        // Update HUD
+        // 4. Update HUD
         this.updateHUD();
     }
 
     render() {
+        const w = this.renderer.width;
+        const h = this.renderer.height;
+        const roadCenter = w / 2;
+        const roadHalf = this.renderer.roadWidth / 2;
+        const usableHalf = roadHalf - 30;
+        const localY = h * 0.75;
+
+        const renderList = [];
+
+        // Compute screen coordinates for each active player
+        for (const [id, p] of this.players) {
+            const isLocal = (id === this.localPlayerId);
+            const pixelX = roadCenter + (p.renderX * usableHalf);
+
+            let pixelY = localY;
+            if (!isLocal) {
+                const deltaMeters = p.renderDist - this.localDistance;
+                pixelY = localY - (deltaMeters * this.pixelsPerMeter);
+            }
+
+            // Cull vehicles far off-screen
+            if (pixelY >= -120 && pixelY <= h + 120) {
+                renderList.push({
+                    id: p.id,
+                    isLocal: isLocal,
+                    x: pixelX,
+                    y: pixelY,
+                    steerAngle: p.renderSteer,
+                    speed: p.renderSpeed,
+                    controls: p.controls
+                });
+            }
+        }
+
+        // If local player hasn't received first snapshot yet, render placeholder at start
+        if (renderList.length === 0) {
+            renderList.push({
+                id: 1,
+                isLocal: true,
+                x: roadCenter,
+                y: localY,
+                steerAngle: 0,
+                speed: 0,
+                controls: { up: false, down: false, left: false, right: false }
+            });
+        }
+
         const gameState = {
-            playerX: this.playerX,
-            playerY: this.playerY,
-            steerAngle: this.steerAngle,
-            speed: this.speed,
-            roadOffset: this.roadOffset,
-            controls: this.input.getState()
+            players: renderList,
+            speed: this.localSpeed,
+            roadOffset: this.roadOffset
         };
 
         this.renderer.render(gameState);
@@ -139,14 +223,17 @@ export class Game {
 
     updateHUD() {
         if (this.ui.speedVal) {
-            this.ui.speedVal.textContent = Math.round(this.speed);
+            this.ui.speedVal.textContent = Math.round(this.localSpeed);
         }
         if (this.ui.distanceVal) {
-            this.ui.distanceVal.textContent = Math.round(this.distance) + 'm';
+            this.ui.distanceVal.textContent = Math.round(this.localDistance) + 'm';
         }
         if (this.ui.lapVal) {
-            const currentLap = Math.floor(this.distance / this.lapLength) + 1;
+            const currentLap = Math.floor(this.localDistance / this.lapLength) + 1;
             this.ui.lapVal.textContent = `${currentLap}`;
+        }
+        if (this.ui.tickVal) {
+            this.ui.tickVal.textContent = `${this.latestServerTick}`;
         }
     }
 }

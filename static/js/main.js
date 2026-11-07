@@ -8,6 +8,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const speedVal = document.getElementById('speedValue');
     const distanceVal = document.getElementById('distanceValue');
     const lapVal = document.getElementById('lapValue');
+    const tickVal = document.getElementById('tickValue');
     const statusPill = document.getElementById('statusPill');
     const statusText = document.getElementById('statusText');
     const latencyBadge = document.getElementById('latencyBadge');
@@ -44,7 +45,16 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    // Telemetry & Echo Display
+    // Telemetry & Snapshot Display
+    networkManager.onSnapshot = (snapshot, rtt) => {
+        if (latencyBadge && rtt !== null) {
+            latencyBadge.textContent = `${rtt}ms RTT`;
+        }
+        if (telemetryBox) {
+            telemetryBox.textContent = JSON.stringify(snapshot, null, 2);
+        }
+    };
+
     networkManager.onTelemetry = (data, rtt) => {
         if (latencyBadge && rtt !== null) {
             latencyBadge.textContent = `${rtt}ms RTT`;
@@ -58,6 +68,7 @@ document.addEventListener('DOMContentLoaded', () => {
         speedVal,
         distanceVal,
         lapVal,
+        tickVal,
         overlay: pauseOverlay
     };
 

@@ -1,5 +1,6 @@
 /**
- * NetworkManager — Manages WebSocket connection, exponential reconnection, and telemetry exchange.
+ * NetworkManager — Manages WebSocket connection, exponential backoff,
+ * input transmission, and authoritative server snapshot reception.
  */
 export class NetworkManager {
     constructor() {
@@ -12,17 +13,23 @@ export class NetworkManager {
         this.reconnectTimer = null;
         this.isExplicitlyClosed = false;
 
+        this.localPlayerId = null;
+        this.seq = 0;
+
+        // Callbacks
         this.onStatusChange = null;
+        this.onSnapshot = null;
+        this.onWelcome = null;
         this.onTelemetry = null;
 
-        // Telemetry throttle
+        // Input throttle
         this.lastSendTime = 0;
-        this.sendInterval = 50; // Send telemetry at ~20 Hz
+        this.sendInterval = 16; // ~60 Hz input transmission
     }
 
     connect() {
         if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
-            return; // Avoid multiple simultaneous sockets
+            return;
         }
 
         this.isExplicitlyClosed = false;
@@ -48,22 +55,35 @@ export class NetworkManager {
     handleOpen(e) {
         this.reconnectAttempts = 0;
         this.updateStatus('CONNECTED', 'Connected to /ws');
+
+        // Immediately send initial input to register with server simulation
+        this.sendInput({ up: false, down: false, left: false, right: false }, true);
     }
 
     handleMessage(e) {
         try {
             const data = JSON.parse(e.data);
-            const now = Date.now();
-            const rtt = data.timestamp ? (now - data.timestamp) : null;
 
-            if (typeof this.onTelemetry === 'function') {
-                this.onTelemetry(data, rtt);
+            if (data.type === 'welcome') {
+                this.localPlayerId = data.playerId;
+                if (typeof this.onWelcome === 'function') {
+                    this.onWelcome(data.playerId);
+                }
+            } else if (data.type === 'snapshot') {
+                const now = Date.now();
+                const rtt = data.timestamp ? (now - data.timestamp) : null;
+                if (typeof this.onSnapshot === 'function') {
+                    this.onSnapshot(data, rtt);
+                }
+            } else if (data.type === 'telemetry') {
+                const now = Date.now();
+                const rtt = data.timestamp ? (now - data.timestamp) : null;
+                if (typeof this.onTelemetry === 'function') {
+                    this.onTelemetry(data, rtt);
+                }
             }
         } catch (err) {
-            // Non-JSON or raw text echoed back
-            if (typeof this.onTelemetry === 'function') {
-                this.onTelemetry({ raw: e.data }, null);
-            }
+            // Non-JSON or raw text fallback
         }
     }
 
@@ -102,23 +122,27 @@ export class NetworkManager {
         }, delay);
     }
 
-    sendTelemetry(controls, speed, distance) {
+    sendInput(controls, force = false) {
         if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
             return;
         }
 
-        const now = Date.now();
-        if (now - this.lastSendTime < this.sendInterval) {
+        const now = performance.now();
+        if (!force && (now - this.lastSendTime < this.sendInterval)) {
             return;
         }
         this.lastSendTime = now;
 
+        this.seq++;
         const packet = {
-            type: 'telemetry',
-            timestamp: now,
-            controls: controls,
-            speed: Math.round(speed),
-            distance: Math.round(distance)
+            type: 'input',
+            seq: this.seq,
+            controls: {
+                up: !!controls.up,
+                down: !!controls.down,
+                left: !!controls.left,
+                right: !!controls.right
+            }
         };
 
         this.socket.send(JSON.stringify(packet));

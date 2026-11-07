@@ -1,5 +1,5 @@
 /**
- * Renderer — Canvas-based arcade racing track and player car rendering.
+ * Renderer — Canvas-based arcade racing track and multi-player car rendering.
  */
 export class Renderer {
     constructor(canvas) {
@@ -10,6 +10,15 @@ export class Renderer {
 
         this.roadWidth = 500;
         this.roadSegmentLength = 60; // Distance between lane stripes
+
+        this.carPalettes = [
+            { main: '#0284c7', glow: '#38bdf8', label: 'YOU' },       // Cyan (Local Player)
+            { main: '#ea580c', glow: '#fb923c', label: 'P2' },        // Orange
+            { main: '#059669', glow: '#34d399', label: 'P3' },        // Emerald
+            { main: '#7c3aed', glow: '#a78bfa', label: 'P4' },        // Purple
+            { main: '#e11d48', glow: '#fb7185', label: 'P5' },        // Crimson
+            { main: '#ca8a04', glow: '#facc15', label: 'P6' },        // Amber
+        ];
     }
 
     resize(targetWidth, targetHeight) {
@@ -53,15 +62,29 @@ export class Renderer {
             this.drawSpeedLines(ctx, w, h, gameState.speed);
         }
 
-        // Draw Player Car
-        this.drawCar(ctx, gameState.playerX, gameState.playerY, gameState.steerAngle, gameState.controls);
+        // Draw all active players in the authoritative simulation world
+        if (gameState.players && gameState.players.length > 0) {
+            // Draw remote players first, then local player on top
+            const sortedPlayers = [...gameState.players].sort((a, b) => {
+                if (a.isLocal) return 1;
+                if (b.isLocal) return -1;
+                return b.y - a.y; // Painter's algorithm
+            });
+
+            for (const p of sortedPlayers) {
+                const paletteIdx = p.isLocal ? 0 : (((p.id - 1) % (this.carPalettes.length - 1)) + 1);
+                const palette = this.carPalettes[paletteIdx];
+                const label = p.isLocal ? "YOU" : `Player ${p.id}`;
+
+                this.drawCar(ctx, p.x, p.y, p.steerAngle, p.controls, palette, label, p.isLocal);
+            }
+        }
     }
 
     drawShoulders(ctx, w, h, roadOffset) {
-        // Subtle scrolling terrain stripes
         const stripeHeight = 80;
         const offset = roadOffset % (stripeHeight * 2);
-        
+
         ctx.fillStyle = '#0b1f13';
         for (let y = -stripeHeight * 2; y < h + stripeHeight; y += stripeHeight * 2) {
             ctx.fillRect(0, y + offset, w, stripeHeight);
@@ -85,12 +108,11 @@ export class Renderer {
         const cycle = dashHeight + dashSpacing;
         const offset = roadOffset % cycle;
 
-        // Draw 2 dividing lane lines (3-lane highway)
         const laneWidth = this.roadWidth / 3;
         const lane1X = left + laneWidth;
         const lane2X = left + laneWidth * 2;
 
-        ctx.fillStyle = '#fbbf24'; // Classic yellow road stripes
+        ctx.fillStyle = '#fbbf24';
         for (let y = -cycle; y < h + cycle; y += cycle) {
             ctx.fillRect(lane1X - 3, y + offset, 6, dashHeight);
             ctx.fillRect(lane2X - 3, y + offset, 6, dashHeight);
@@ -102,15 +124,22 @@ export class Renderer {
         ctx.fillRect(right - 10, 0, 4, h);
     }
 
-    drawCar(ctx, x, y, steerAngle, controls) {
+    drawCar(ctx, x, y, steerAngle, controls, palette, label, isLocal) {
         ctx.save();
         ctx.translate(x, y);
+
+        // Player Tag / Nametag
+        ctx.font = '600 11px Outfit, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = isLocal ? '#38bdf8' : '#cbd5e1';
+        ctx.fillText(label, 0, -56);
+
         ctx.rotate(steerAngle);
 
         const carW = 44;
         const carH = 78;
 
-        // Headlight Beams (semi-transparent cones)
+        // Headlight Beams
         const beamGradient = ctx.createLinearGradient(0, -carH / 2, 0, -carH / 2 - 160);
         beamGradient.addColorStop(0, 'rgba(255, 255, 255, 0.45)');
         beamGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
@@ -130,20 +159,18 @@ export class Renderer {
         ctx.roundRect(-carW / 2 - 4, -carH / 2 + 6, carW + 8, carH + 4, 10);
         ctx.fill();
 
-        // 4 Wheels / Tires with rims
+        // 4 Wheels
         ctx.fillStyle = '#0f172a';
-        // Front wheels turn slightly with steering
         this.drawWheel(ctx, -carW / 2 - 3, -carH / 2 + 14, steerAngle * 1.5);
         this.drawWheel(ctx, carW / 2 + 3, -carH / 2 + 14, steerAngle * 1.5);
-        // Rear wheels
         this.drawWheel(ctx, -carW / 2 - 3, carH / 2 - 20, 0);
         this.drawWheel(ctx, carW / 2 + 3, carH / 2 - 20, 0);
 
-        // Main Car Body (Sports Car / GT style)
+        // Main Car Body
         const bodyGrad = ctx.createLinearGradient(-carW / 2, 0, carW / 2, 0);
-        bodyGrad.addColorStop(0, '#0284c7');
-        bodyGrad.addColorStop(0.5, '#38bdf8');
-        bodyGrad.addColorStop(1, '#0284c7');
+        bodyGrad.addColorStop(0, palette.main);
+        bodyGrad.addColorStop(0.5, palette.glow);
+        bodyGrad.addColorStop(1, palette.main);
 
         ctx.fillStyle = bodyGrad;
         ctx.beginPath();
@@ -161,7 +188,7 @@ export class Renderer {
         ctx.fill();
 
         // Windshield reflection
-        ctx.fillStyle = 'rgba(56, 189, 248, 0.4)';
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.25)';
         ctx.beginPath();
         ctx.moveTo(-carW / 2 + 8, -carH / 2 + 22);
         ctx.lineTo(0, -carH / 2 + 22);
@@ -172,16 +199,12 @@ export class Renderer {
 
         // Headlights
         ctx.fillStyle = '#fef08a';
-        ctx.shadowColor = '#fef08a';
-        ctx.shadowBlur = 10;
         ctx.fillRect(-carW / 2 + 4, -carH / 2 + 2, 8, 4);
         ctx.fillRect(carW / 2 - 12, -carH / 2 + 2, 8, 4);
 
-        // Taillights (glow red, flare intense red when braking)
-        const isBraking = controls && controls.brake;
+        // Taillights
+        const isBraking = controls && controls.down;
         ctx.fillStyle = isBraking ? '#ff1e1e' : '#991b1b';
-        ctx.shadowColor = isBraking ? '#ff0000' : 'transparent';
-        ctx.shadowBlur = isBraking ? 18 : 0;
         ctx.fillRect(-carW / 2 + 4, carH / 2 - 4, 10, 4);
         ctx.fillRect(carW / 2 - 14, carH / 2 - 4, 10, 4);
 
@@ -194,13 +217,13 @@ export class Renderer {
         ctx.rotate(angle);
         ctx.fillStyle = '#1e293b';
         ctx.fillRect(-4, -8, 8, 16);
-        ctx.fillStyle = '#64748b'; // Rim accent
+        ctx.fillStyle = '#64748b';
         ctx.fillRect(-1, -6, 2, 12);
         ctx.restore();
     }
 
     drawSpeedLines(ctx, w, h, speed) {
-        const count = Math.floor((speed - 80) / 10);
+        const count = Math.min(18, Math.floor((speed - 80) / 10));
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
         ctx.lineWidth = 2;
         ctx.beginPath();
