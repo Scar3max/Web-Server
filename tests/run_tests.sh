@@ -71,7 +71,13 @@ python3 tests/test_phase5_audit.py
 
 echo ""
 echo "=================================================="
-echo "10. Running ApacheBench Concurrency Regression Test"
+echo "10. Running Phase 6 Curved Track Geometry & Collisions"
+echo "=================================================="
+python3 tests/test_phase6_track_collisions.py
+
+echo ""
+echo "=================================================="
+echo "11. Running ApacheBench Concurrency Regression Test"
 echo "=================================================="
 ab -n 5000 -c 50 http://127.0.0.1:8080/
 
@@ -83,13 +89,13 @@ trap - EXIT
 
 echo ""
 echo "=================================================="
-echo "11. Running Server Shutdown Under Active Load Test"
+echo "12. Running Server Shutdown Under Active Load Test"
 echo "=================================================="
 python3 tests/test_shutdown_under_load.py
 
 echo ""
 echo "=================================================="
-echo "12. Running Full Server ThreadSanitizer Verification"
+echo "13. Running Full Server ThreadSanitizer Verification"
 echo "=================================================="
 python3 -c "
 import sys; sys.path.insert(0, 'tests')
@@ -99,7 +105,7 @@ test_shutdown_under_load.test_shutdown_under_load('./build/server_tsan', use_set
 
 echo ""
 echo "=================================================="
-echo "13. Running Full Server AddressSanitizer & LeakSanitizer Verification"
+echo "14. Running Full Server AddressSanitizer & LeakSanitizer Verification"
 echo "=================================================="
 python3 -c "
 import sys; sys.path.insert(0, 'tests')
