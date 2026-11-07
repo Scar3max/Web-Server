@@ -1,5 +1,123 @@
-<html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Architecture | C++ Server</title>
+    <meta name="description" content="Technical details and architecture of the high-performance C++ HTTP server.">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap');
+        
+        :root {
+            --bg-color: #0f172a;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --accent: #3b82f6;
+            --accent-gradient: linear-gradient(135deg, #3b82f6, #8b5cf6);
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --card-border: rgba(255, 255, 255, 0.1);
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background-image: radial-gradient(circle at top left, rgba(139, 92, 246, 0.15), transparent 40%),
+                              radial-gradient(circle at bottom right, rgba(59, 130, 246, 0.15), transparent 40%);
+        }
+
+        nav {
+            position: absolute;
+            top: 2rem;
+            display: flex;
+            gap: 2rem;
+            background: rgba(30, 41, 59, 0.5);
+            padding: 0.8rem 2rem;
+            border-radius: 99px;
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--card-border);
+        }
+
+        nav a {
+            color: var(--text-muted);
+            text-decoration: none;
+            font-weight: 600;
+            transition: color 0.3s ease;
+            font-size: 1.1rem;
+        }
+
+        nav a:hover, nav a.active {
+            color: var(--text-main);
+        }
+
+        .container {
+            max-width: 800px;
+            padding: 3.5rem;
+            background: var(--card-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--card-border);
+            border-radius: 24px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            text-align: left;
+            transform: translateY(0);
+            transition: transform 0.4s ease, box-shadow 0.4s ease;
+            animation: fadeIn 0.8s ease-out;
+        }
+
+        .container:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 35px 60px -15px rgba(0, 0, 0, 0.6);
+        }
+
+        h1 {
+            font-size: 3rem;
+            margin: 0 0 1.5rem 0;
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: -1px;
+            text-align: center;
+        }
+
+        p {
+            color: var(--text-muted);
+            font-size: 1.15rem;
+            line-height: 1.7;
+            margin-bottom: 1.5rem;
+        }
+
+        code {
+            background: rgba(0,0,0,0.3);
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-family: monospace;
+            color: #e2e8f0;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
 <body>
-<h1>About Page</h1>
+    <nav>
+        <a href="/">Home</a>
+        <a href="/about" class="active">Architecture</a>
+    </nav>
+    <main class="container">
+        <h1>Under The Hood</h1>
+        <p>This server rejects bloated modern frameworks in favor of raw POSIX system calls. It leverages Linux <code>epoll</code> for O(1) I/O multiplexing, ensuring that thousands of concurrent connections can be handled without blocking the main event loop.</p>
+        <p>Incoming requests are parsed and handed off to a thread-safe Task Queue. A dynamic pool of worker threads consumes these tasks asynchronously. The result is a highly scalable, Nginx-like architecture built entirely from first principles.</p>
+    </main>
 </body>
 </html>
