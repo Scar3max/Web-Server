@@ -12,6 +12,7 @@ export class Game {
 
         this.isPaused = false;
         this.isRunning = false;
+        this.allowDriving = false;
         this.lastTime = 0;
         this.animationFrameId = null;
 
@@ -126,17 +127,29 @@ export class Game {
         this.animationFrameId = requestAnimationFrame((t) => this.loop(t));
     }
 
+    startDriving() {
+        this.allowDriving = true;
+    }
+
+    stopDriving() {
+        this.allowDriving = false;
+        // Zero out controls
+        this.network.sendInput({ up: false, down: false, left: false, right: false }, true);
+    }
+
     update(dt) {
         const rawControls = this.input.getState();
 
-        // 1. Send authoritative input intention to server
+        // 1. Send authoritative input intention to server only when actively driving
         const controls = {
-            up: rawControls.throttle,
-            down: rawControls.brake,
-            left: rawControls.left,
-            right: rawControls.right
+            up: this.allowDriving ? !!rawControls.throttle : false,
+            down: this.allowDriving ? !!rawControls.brake : false,
+            left: this.allowDriving ? !!rawControls.left : false,
+            right: this.allowDriving ? !!rawControls.right : false
         };
-        this.network.sendInput(controls);
+        if (this.allowDriving) {
+            this.network.sendInput(controls);
+        }
 
         // 2. Smoothly interpolate all players towards latest authoritative server targets
         const lerpFactor = Math.min(1.0, 18.0 * dt);

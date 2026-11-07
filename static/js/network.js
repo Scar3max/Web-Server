@@ -22,6 +22,19 @@ export class NetworkManager {
         this.onWelcome = null;
         this.onTelemetry = null;
 
+        // Room lifecycle callbacks
+        this.onRoomCreated = null;
+        this.onRoomJoined = null;
+        this.onRoomUpdated = null;
+        this.onPlayerJoined = null;
+        this.onPlayerLeft = null;
+        this.onReadyUpdated = null;
+        this.onCountdown = null;
+        this.onRaceStarted = null;
+        this.onRaceFinished = null;
+        this.onRoomError = null;
+        this.onRoomLeft = null;
+
         // Input throttle
         this.lastSendTime = 0;
         this.sendInterval = 16; // ~60 Hz input transmission
@@ -55,9 +68,6 @@ export class NetworkManager {
     handleOpen(e) {
         this.reconnectAttempts = 0;
         this.updateStatus('CONNECTED', 'Connected to /ws');
-
-        // Immediately send initial input to register with server simulation
-        this.sendInput({ up: false, down: false, left: false, right: false }, true);
     }
 
     handleMessage(e) {
@@ -75,6 +85,50 @@ export class NetworkManager {
                 if (typeof this.onSnapshot === 'function') {
                     this.onSnapshot(data, rtt);
                 }
+            } else if (data.type === 'room_created') {
+                if (typeof this.onRoomCreated === 'function') {
+                    this.onRoomCreated(data);
+                }
+            } else if (data.type === 'room_joined') {
+                if (typeof this.onRoomJoined === 'function') {
+                    this.onRoomJoined(data);
+                }
+            } else if (data.type === 'room_updated') {
+                if (typeof this.onRoomUpdated === 'function') {
+                    this.onRoomUpdated(data.room);
+                }
+            } else if (data.type === 'player_joined') {
+                if (typeof this.onPlayerJoined === 'function') {
+                    this.onPlayerJoined(data);
+                }
+            } else if (data.type === 'player_left') {
+                if (typeof this.onPlayerLeft === 'function') {
+                    this.onPlayerLeft(data);
+                }
+            } else if (data.type === 'ready_updated') {
+                if (typeof this.onReadyUpdated === 'function') {
+                    this.onReadyUpdated(data);
+                }
+            } else if (data.type === 'countdown') {
+                if (typeof this.onCountdown === 'function') {
+                    this.onCountdown(data.countdown, data.room);
+                }
+            } else if (data.type === 'race_started') {
+                if (typeof this.onRaceStarted === 'function') {
+                    this.onRaceStarted(data.room);
+                }
+            } else if (data.type === 'race_finished') {
+                if (typeof this.onRaceFinished === 'function') {
+                    this.onRaceFinished(data.results, data.room);
+                }
+            } else if (data.type === 'room_error') {
+                if (typeof this.onRoomError === 'function') {
+                    this.onRoomError(data.message);
+                }
+            } else if (data.type === 'room_left') {
+                if (typeof this.onRoomLeft === 'function') {
+                    this.onRoomLeft(data.roomId);
+                }
             } else if (data.type === 'telemetry') {
                 const now = Date.now();
                 const rtt = data.timestamp ? (now - data.timestamp) : null;
@@ -85,6 +139,52 @@ export class NetworkManager {
         } catch (err) {
             // Non-JSON or raw text fallback
         }
+    }
+
+    createRoom(name) {
+        if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+        this.socket.send(JSON.stringify({
+            type: 'create_room',
+            name: name || ''
+        }));
+    }
+
+    joinRoom(code, name) {
+        if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+        this.socket.send(JSON.stringify({
+            type: 'join_room',
+            code: (code || '').toUpperCase().trim(),
+            name: name || ''
+        }));
+    }
+
+    leaveRoom() {
+        if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+        this.socket.send(JSON.stringify({
+            type: 'leave_room'
+        }));
+    }
+
+    setReady(ready) {
+        if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+        this.socket.send(JSON.stringify({
+            type: 'set_ready',
+            ready: !!ready
+        }));
+    }
+
+    startRace() {
+        if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+        this.socket.send(JSON.stringify({
+            type: 'start_race'
+        }));
+    }
+
+    getRoomInfo() {
+        if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+        this.socket.send(JSON.stringify({
+            type: 'get_room_info'
+        }));
     }
 
     handleError(e) {
