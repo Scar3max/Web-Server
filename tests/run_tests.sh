@@ -59,7 +59,13 @@ python3 tests/test_phase4_stress.py
 
 echo ""
 echo "=================================================="
-echo "8. Running ApacheBench Concurrency Regression Test"
+echo "8. Running Phase 5 Multiplayer Game Rooms Test Suite"
+echo "=================================================="
+python3 tests/test_phase5_rooms.py
+
+echo ""
+echo "=================================================="
+echo "9. Running ApacheBench Concurrency Regression Test"
 echo "=================================================="
 ab -n 5000 -c 50 http://127.0.0.1:8080/
 
@@ -71,13 +77,13 @@ trap - EXIT
 
 echo ""
 echo "=================================================="
-echo "9. Running Server Shutdown Under Active Load Test"
+echo "10. Running Server Shutdown Under Active Load Test"
 echo "=================================================="
 python3 tests/test_shutdown_under_load.py
 
 echo ""
 echo "=================================================="
-echo "10. Running Full Server ThreadSanitizer Verification"
+echo "11. Running Full Server ThreadSanitizer Verification"
 echo "=================================================="
 python3 -c "
 import sys; sys.path.insert(0, 'tests')
