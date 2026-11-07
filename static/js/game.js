@@ -1,9 +1,10 @@
 /**
- * Game — Consumes server-authoritative snapshots and drives
- * smooth client-side interpolation and input streaming.
+ * Game — Client-Side Prediction, Server Reconciliation,
+ * and Remote Player Snapshot Interpolation Engine.
  */
 
 import { defaultTrack } from './track.js';
+import { LocalPlayerPredictor, RemotePlayerInterpolator } from './prediction.js';
 
 export class Game {
     constructor(canvas, inputManager, renderer, networkManager, uiElements) {
@@ -23,6 +24,17 @@ export class Game {
         this.localPlayerId = null;
         this.latestServerTick = 0;
 
+        // Fixed 60 Hz simulation accumulator for deterministic client prediction
+        this.fixedDt = 1.0 / 60.0;
+        this.accumulatedTime = 0.0;
+
+        // Local Player Prediction & Reconciliation Engine
+        this.localPredictor = new LocalPlayerPredictor(120);
+
+        // Remote Player Snapshot Interpolators (Map<playerId, RemotePlayerInterpolator>)
+        this.remoteInterpolators = new Map();
+        this.playerNames = new Map();
+
         // Visual tracking for local player
         this.localX = 0.0;          // Normalized [-1.0, 1.0]
         this.localSpeed = 0.0;      // km/h
@@ -32,13 +44,24 @@ export class Game {
         this.localWorldY = 0.0;
         this.localHeading = Math.PI / 2;
         this.roadOffset = 0.0;
+        this.currentControls = { up: false, down: false, left: false, right: false };
 
         this.trackLength = this.track.getTotalLength();
         this.lapLength = this.trackLength;
-        this.pixelsPerMeter = 16.0;  // Scale matching renderer
+        this.pixelsPerMeter = 16.0;
 
-        // Player interpolation states: Map<id, { renderX, renderDist, renderSpeed, renderSteer, renderWorldX, renderWorldY, renderHeading, ... }>
-        this.players = new Map();
+        // Initialize local predictor at start line
+        this.localPredictor.init({
+            x: 0.0,
+            distance: 0.0,
+            speed: 0.0,
+            steer: 0.0,
+            worldX: 0.0,
+            worldY: 0.0,
+            heading: Math.PI / 2,
+            ackSeq: 0,
+            tick: 0
+        }, this.track);
 
         // Wire network handlers
         this.network.onWelcome = (playerId) => {
@@ -83,57 +106,49 @@ export class Game {
 
     handleSnapshot(snapshot, rtt) {
         this.latestServerTick = snapshot.tick;
-
         const activeIds = new Set();
 
         for (const sp of snapshot.players) {
             activeIds.add(sp.id);
+            if (sp.name) {
+                this.playerNames.set(sp.id, sp.name);
+            }
 
-            let state = this.players.get(sp.id);
-            const wPos = (sp.worldX !== undefined && sp.worldY !== undefined)
-                ? { x: sp.worldX, y: sp.worldY, angle: (sp.heading !== undefined ? sp.heading : 0) }
-                : this.track.toWorldPosition(sp.distance, sp.x);
-            const heading = (sp.heading !== undefined) ? sp.heading : (wPos.angle + (sp.steer || 0));
-
-            if (!state) {
-                state = {
-                    id: sp.id,
-                    name: sp.name || null,
-                    renderX: sp.x,
-                    renderDist: sp.distance,
-                    renderSpeed: sp.speed,
-                    renderSteer: sp.steer,
-                    renderWorldX: wPos.x,
-                    renderWorldY: wPos.y,
-                    renderHeading: heading,
-                    targetX: sp.x,
-                    targetDist: sp.distance,
-                    targetSpeed: sp.speed,
-                    targetSteer: sp.steer,
-                    targetWorldX: wPos.x,
-                    targetWorldY: wPos.y,
-                    targetHeading: heading,
-                    controls: { up: false, down: false, left: false, right: false }
-                };
-                this.players.set(sp.id, state);
+            if (sp.id === this.localPlayerId) {
+                // Reconcile local player prediction with authoritative server state
+                this.localPredictor.reconcile(sp, this.track);
             } else {
-                if (sp.name) state.name = sp.name;
-                state.targetX = sp.x;
-                state.targetDist = sp.distance;
-                state.targetSpeed = sp.speed;
-                state.targetSteer = sp.steer;
-                state.targetWorldX = wPos.x;
-                state.targetWorldY = wPos.y;
-                state.targetHeading = heading;
+                // Buffer remote player snapshot for smooth authoritative interpolation
+                let interpolator = this.remoteInterpolators.get(sp.id);
+                if (!interpolator) {
+                    interpolator = new RemotePlayerInterpolator(60.0);
+                    this.remoteInterpolators.set(sp.id, interpolator);
+                }
+                interpolator.pushSnapshot({
+                    ...sp,
+                    tick: snapshot.tick,
+                    timestamp: snapshot.timestamp || performance.now()
+                });
             }
         }
 
-        // Clean up disconnected players
-        for (const [id] of this.players) {
+        // Clean up disconnected remote players
+        for (const id of this.remoteInterpolators.keys()) {
             if (!activeIds.has(id)) {
-                this.players.delete(id);
+                this.remoteInterpolators.delete(id);
+                this.playerNames.delete(id);
             }
         }
+    }
+
+    startDriving() {
+        this.allowDriving = true;
+    }
+
+    stopDriving() {
+        this.allowDriving = false;
+        this.currentControls = { up: false, down: false, left: false, right: false };
+        this.network.sendInput(this.currentControls, true);
     }
 
     loop(currentTime) {
@@ -151,58 +166,41 @@ export class Game {
         this.animationFrameId = requestAnimationFrame((t) => this.loop(t));
     }
 
-    startDriving() {
-        this.allowDriving = true;
-    }
-
-    stopDriving() {
-        this.allowDriving = false;
-        // Zero out controls
-        this.network.sendInput({ up: false, down: false, left: false, right: false }, true);
-    }
-
     update(dt) {
         const rawControls = this.input.getState();
 
-        // 1. Send authoritative input intention to server only when actively driving
-        const controls = {
+        this.currentControls = {
             up: this.allowDriving ? !!rawControls.throttle : false,
             down: this.allowDriving ? !!rawControls.brake : false,
             left: this.allowDriving ? !!rawControls.left : false,
             right: this.allowDriving ? !!rawControls.right : false
         };
-        if (this.allowDriving) {
-            this.network.sendInput(controls);
-        }
 
-        // 2. Smoothly interpolate all players towards latest authoritative server targets
-        const lerpFactor = Math.min(1.0, 18.0 * dt);
+        // 1. Fixed 60 Hz Local Player Prediction Loop
+        // Accumulate frame delta and step prediction in lockstep with server physics
+        this.accumulatedTime += Math.min(dt, 0.1);
 
-        for (const [id, p] of this.players) {
-            p.renderX += (p.targetX - p.renderX) * lerpFactor;
-            p.renderDist += (p.targetDist - p.renderDist) * lerpFactor;
-            p.renderSpeed += (p.targetSpeed - p.renderSpeed) * lerpFactor;
-            p.renderSteer += (p.targetSteer - p.renderSteer) * lerpFactor;
-
-            // Project smoothly onto curved track centerline and normal
-            const curPos = this.track.toWorldPosition(p.renderDist, p.renderX);
-            p.renderWorldX = curPos.x;
-            p.renderWorldY = curPos.y;
-            p.renderHeading = curPos.angle + p.renderSteer;
-
-            if (id === this.localPlayerId) {
-                this.localX = p.renderX;
-                this.localDistance = p.renderDist;
-                this.localSpeed = p.renderSpeed;
-                this.localSteer = p.renderSteer;
-                this.localWorldX = p.renderWorldX;
-                this.localWorldY = p.renderWorldY;
-                this.localHeading = p.renderHeading;
-                p.controls = controls;
+        while (this.accumulatedTime >= this.fixedDt) {
+            if (this.allowDriving) {
+                const seq = this.network.sendInput(this.currentControls, true);
+                if (seq !== null) {
+                    this.localPredictor.predictInput(seq, this.currentControls, this.fixedDt, this.track);
+                }
             }
+            this.accumulatedTime -= this.fixedDt;
         }
 
-        // 3. Drive road scroll offset from local authoritative speed
+        // 2. Obtain Visual Smoothed Local Player State
+        const localRender = this.localPredictor.getRenderState(dt, this.track);
+        this.localX = localRender.x;
+        this.localDistance = localRender.distance;
+        this.localSpeed = localRender.speed;
+        this.localSteer = localRender.steer;
+        this.localWorldX = localRender.worldX;
+        this.localWorldY = localRender.worldY;
+        this.localHeading = localRender.heading;
+
+        // 3. Drive road scroll offset from local speed
         const worldSpeedMps = (this.localSpeed * 1000.0 / 3600.0);
         this.roadOffset += worldSpeedMps * 12.0 * dt;
 
@@ -213,39 +211,40 @@ export class Game {
     render() {
         const renderList = [];
 
-        // Build list of all players with world-space coordinates
-        for (const [id, p] of this.players) {
-            const isLocal = (id === this.localPlayerId);
-            renderList.push({
-                id: p.id,
-                isLocal: isLocal,
-                name: p.name,
-                worldX: p.renderWorldX,
-                worldY: p.renderWorldY,
-                heading: p.renderHeading,
-                distance: p.renderDist,
-                speed: p.renderSpeed,
-                controls: p.controls
-            });
+        // 1. Local Player (immediate prediction + visual smoothing)
+        renderList.push({
+            id: this.localPlayerId || 1,
+            isLocal: true,
+            name: 'YOU',
+            worldX: this.localWorldX,
+            worldY: this.localWorldY,
+            heading: this.localHeading,
+            distance: this.localDistance,
+            speed: this.localSpeed,
+            controls: this.currentControls
+        });
+
+        // 2. Remote Players (authoritative snapshot interpolation)
+        const renderTime = performance.now();
+        for (const [id, interp] of this.remoteInterpolators) {
+            if (id === this.localPlayerId) continue;
+            const state = interp.getInterpolatedState(renderTime, this.track);
+            if (state) {
+                renderList.push({
+                    id: id,
+                    isLocal: false,
+                    name: this.playerNames.get(id) || `Player ${id}`,
+                    worldX: state.worldX,
+                    worldY: state.worldY,
+                    heading: state.heading,
+                    distance: state.distance,
+                    speed: state.speed,
+                    controls: { up: false, down: false, left: false, right: false }
+                });
+            }
         }
 
-        // If local player hasn't received first snapshot yet, render placeholder at start
-        if (renderList.length === 0) {
-            const startPos = this.track.toWorldPosition(0, 0);
-            renderList.push({
-                id: 1,
-                isLocal: true,
-                name: 'YOU',
-                worldX: startPos.x,
-                worldY: startPos.y,
-                heading: startPos.angle,
-                distance: 0,
-                speed: 0,
-                controls: { up: false, down: false, left: false, right: false }
-            });
-        }
-
-        const localPlayer = renderList.find(p => p.isLocal) || renderList[0];
+        const localPlayer = renderList[0];
 
         const gameState = {
             players: renderList,
@@ -254,9 +253,6 @@ export class Game {
             trackLength: this.trackLength,
             roadOffset: this.roadOffset
         };
-
-        this.renderer.render(gameState);
-    }
 
         this.renderer.render(gameState);
     }
