@@ -113,9 +113,22 @@ public:
         return false;
     }
 
-    // Pushes a room lifecycle event that does not modify player count (START_COUNTDOWN, CANCEL_COUNTDOWN, DESTROY_ROOM)
+    // Pushes a room lifecycle event that does not modify player count (START_COUNTDOWN, CANCEL_COUNTDOWN, DESTROY_ROOM, ROOM_JOIN, ROOM_LEAVE)
+    // Automatically purges pending inputs if the event leaves a room or destroys a room.
     bool pushEvent(PlayerEvent ev) {
         std::lock_guard<std::mutex> lock(queueMutex);
+        if (ev.type == PlayerEvent::Type::ROOM_LEAVE) {
+            pendingInputs.erase(ev.playerId);
+        } else if (ev.type == PlayerEvent::Type::DESTROY_ROOM) {
+            for (auto it = pendingInputs.begin(); it != pendingInputs.end(); ) {
+                if (it->second.roomId == ev.roomId) {
+                    it = pendingInputs.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+
         if (eventQueue.size() + activeAdmittedPlayers < MAX_LIFECYCLE_CAPACITY) {
             eventQueue.push_back(std::move(ev));
             highWaterEvents = std::max(highWaterEvents, eventQueue.size());

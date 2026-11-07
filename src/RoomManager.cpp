@@ -147,12 +147,10 @@ bool RoomManager::leaveRoom(uint32_t playerId, uint32_t& outOldRoomId, bool& out
         outNewHostId = newHostId;
     }
 
-    // If room was in COUNTDOWN and player leaves, check if countdown should cancel
+    // If room was in COUNTDOWN and any player leaves, cancel the countdown so the remaining racers return to lobby
     if (room.state == RoomState::COUNTDOWN) {
-        if (room.members.size() < 2) {
-            room.state = RoomState::WAITING;
-            outCountdownCancelled = true;
-        }
+        room.state = RoomState::WAITING;
+        outCountdownCancelled = true;
     }
 
     return true;

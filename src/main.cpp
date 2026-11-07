@@ -339,7 +339,16 @@ static void handleWebSocketTextMessage(Connection& conn,
             ev.playerName = name;
             ev.lane = 0;
             ev.trackLength = room->trackLength;
-            inputQueue.pushEvent(ev);
+            if (!inputQueue.pushEvent(ev)) {
+                uint32_t oldRoomId = 0;
+                bool roomDestroyed = false;
+                uint32_t newHostId = 0;
+                bool countdownCancelled = false;
+                roomManager.leaveRoom(pid, oldRoomId, roomDestroyed, newHostId, countdownCancelled);
+                string errFrame = WebSocketFrame::encodeTextFrame(RoomProtocol::makeError("Server event queue congested, could not create room"));
+                sendWebSocketFrameSafe(conn, epollFd, errFrame);
+                return;
+            }
 
             string createdMsg = WebSocketFrame::encodeTextFrame(RoomProtocol::makeRoomCreated(*room, pid));
             sendWebSocketFrameSafe(conn, epollFd, createdMsg);
@@ -377,7 +386,16 @@ static void handleWebSocketTextMessage(Connection& conn,
             ev.playerName = member.name;
             ev.lane = member.lane;
             ev.trackLength = room->trackLength;
-            inputQueue.pushEvent(ev);
+            if (!inputQueue.pushEvent(ev)) {
+                uint32_t oldRoomId = 0;
+                bool roomDestroyed = false;
+                uint32_t newHostId = 0;
+                bool countdownCancelled = false;
+                roomManager.leaveRoom(pid, oldRoomId, roomDestroyed, newHostId, countdownCancelled);
+                string errFrame = WebSocketFrame::encodeTextFrame(RoomProtocol::makeError("Server event queue congested, could not join room"));
+                sendWebSocketFrameSafe(conn, epollFd, errFrame);
+                return;
+            }
 
             string joinedMsg = WebSocketFrame::encodeTextFrame(RoomProtocol::makeRoomJoined(*room, pid));
             sendWebSocketFrameSafe(conn, epollFd, joinedMsg);
@@ -511,7 +529,12 @@ static void handleWebSocketTextMessage(Connection& conn,
             ev.roomId = roomId;
             ev.roomCode = room->code;
             ev.trackLength = room->trackLength;
-            inputQueue.pushEvent(ev);
+            if (!inputQueue.pushEvent(ev)) {
+                room->state = RoomState::WAITING;
+                string errFrame = WebSocketFrame::encodeTextFrame(RoomProtocol::makeError("Server event queue congested, could not start race"));
+                sendWebSocketFrameSafe(conn, epollFd, errFrame);
+                return;
+            }
 
             string countdownMsg = WebSocketFrame::encodeTextFrame(RoomProtocol::makeCountdown(*room, room->countdownSeconds));
             string updatedMsg = WebSocketFrame::encodeTextFrame(RoomProtocol::makeRoomUpdated(*room));

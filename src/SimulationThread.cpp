@@ -77,6 +77,10 @@ void SimulationThread::runLoop() {
                     }
                 }
             } else if (ev.type == PlayerEvent::Type::ROOM_JOIN) {
+                // Ensure player is cleanly removed from practice world (room 0) to avoid ghost vehicles
+                roomSims[0].vehicles.erase(ev.playerId);
+                roomSims[0].playerNames.erase(ev.playerId);
+
                 auto& rsim = roomSims[ev.roomId];
                 rsim.roomId = ev.roomId;
                 rsim.roomCode = ev.roomCode;
@@ -92,11 +96,17 @@ void SimulationThread::runLoop() {
                 if (rIt != roomSims.end()) {
                     rIt->second.vehicles.erase(ev.playerId);
                     rIt->second.playerNames.erase(ev.playerId);
-                    if (rIt->second.state == RoomState::COUNTDOWN && rIt->second.vehicles.size() < 2) {
+                    if (rIt->second.state == RoomState::COUNTDOWN) {
                         rIt->second.state = RoomState::WAITING;
                         rIt->second.countdownRemaining = 5.0;
                     }
                 }
+                // Restore clean practice state in global practice room (room 0)
+                PlayerState practiceState(ev.playerId, ev.socketFd, ev.connectionId, 0, ev.playerName);
+                double laneOffset = static_cast<double>(static_cast<int>(ev.playerId - 1) % 3 - 1) * 0.45;
+                practiceState.x = laneOffset;
+                roomSims[0].vehicles[ev.playerId] = practiceState;
+                roomSims[0].playerNames[ev.playerId] = ev.playerName;
             } else if (ev.type == PlayerEvent::Type::START_COUNTDOWN) {
                 auto rIt = roomSims.find(ev.roomId);
                 if (rIt != roomSims.end()) {
