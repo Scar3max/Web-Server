@@ -240,6 +240,18 @@ export class Track {
             }
         };
     }
+
+    getTotalLength() {
+        return this.totalLength;
+    }
+
+    getTrackWidth() {
+        return this.trackWidth;
+    }
+
+    getControlPoints() {
+        return this.controlPoints;
+    }
 }
 
 export const defaultTrack = new Track();
