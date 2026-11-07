@@ -129,6 +129,30 @@ server/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/build
 .PHONY : server/fast
 
+src/Connection.o: src/Connection.cpp.o
+.PHONY : src/Connection.o
+
+# target to build an object file
+src/Connection.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/src/Connection.cpp.o
+.PHONY : src/Connection.cpp.o
+
+src/Connection.i: src/Connection.cpp.i
+.PHONY : src/Connection.i
+
+# target to preprocess a source file
+src/Connection.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/src/Connection.cpp.i
+.PHONY : src/Connection.cpp.i
+
+src/Connection.s: src/Connection.cpp.s
+.PHONY : src/Connection.s
+
+# target to generate assembly for a file
+src/Connection.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/src/Connection.cpp.s
+.PHONY : src/Connection.cpp.s
+
 src/FileManager.o: src/FileManager.cpp.o
 .PHONY : src/FileManager.o
 
@@ -200,6 +224,30 @@ src/Logger.s: src/Logger.cpp.s
 src/Logger.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/src/Logger.cpp.s
 .PHONY : src/Logger.cpp.s
+
+src/ResponseQueue.o: src/ResponseQueue.cpp.o
+.PHONY : src/ResponseQueue.o
+
+# target to build an object file
+src/ResponseQueue.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/src/ResponseQueue.cpp.o
+.PHONY : src/ResponseQueue.cpp.o
+
+src/ResponseQueue.i: src/ResponseQueue.cpp.i
+.PHONY : src/ResponseQueue.i
+
+# target to preprocess a source file
+src/ResponseQueue.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/src/ResponseQueue.cpp.i
+.PHONY : src/ResponseQueue.cpp.i
+
+src/ResponseQueue.s: src/ResponseQueue.cpp.s
+.PHONY : src/ResponseQueue.s
+
+# target to generate assembly for a file
+src/ResponseQueue.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/src/ResponseQueue.cpp.s
+.PHONY : src/ResponseQueue.cpp.s
 
 src/Router.o: src/Router.cpp.o
 .PHONY : src/Router.o
@@ -306,6 +354,9 @@ help:
 	@echo "... edit_cache"
 	@echo "... rebuild_cache"
 	@echo "... server"
+	@echo "... src/Connection.o"
+	@echo "... src/Connection.i"
+	@echo "... src/Connection.s"
 	@echo "... src/FileManager.o"
 	@echo "... src/FileManager.i"
 	@echo "... src/FileManager.s"
@@ -315,6 +366,9 @@ help:
 	@echo "... src/Logger.o"
 	@echo "... src/Logger.i"
 	@echo "... src/Logger.s"
+	@echo "... src/ResponseQueue.o"
+	@echo "... src/ResponseQueue.i"
+	@echo "... src/ResponseQueue.s"
 	@echo "... src/Router.o"
 	@echo "... src/Router.i"
 	@echo "... src/Router.s"
