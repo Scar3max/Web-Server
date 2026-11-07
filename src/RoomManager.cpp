@@ -1,4 +1,5 @@
 #include "RoomManager.h"
+#include "ServerMetrics.h"
 #include <algorithm>
 #include <cctype>
 
@@ -28,13 +29,17 @@ std::string RoomManager::generateUniqueCode() {
 
 bool RoomManager::createRoom(uint32_t hostPlayerId, int socketFd, const std::string& hostName,
                              std::string& outCode, uint32_t& outRoomId, std::string& outError) {
+    ServerMetrics::instance().multiplayerRoomCreationsAttemptedTotal.fetch_add(1, std::memory_order_relaxed);
+
     if (playerToRoomId.find(hostPlayerId) != playerToRoomId.end()) {
         outError = "Player is already member of a room";
+        ServerMetrics::instance().multiplayerRoomCreationsFailedTotal.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
 
     if (rooms.size() >= MAX_ROOMS) {
         outError = "Server room limit reached";
+        ServerMetrics::instance().multiplayerRoomCreationsFailedTotal.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
 
@@ -55,13 +60,18 @@ bool RoomManager::createRoom(uint32_t hostPlayerId, int socketFd, const std::str
 
     outCode = code;
     outRoomId = roomId;
+
+    ServerMetrics::instance().multiplayerRoomsActive.store(rooms.size(), std::memory_order_relaxed);
     return true;
 }
 
 bool RoomManager::joinRoom(const std::string& code, uint32_t playerId, int socketFd,
                            const std::string& playerName, uint32_t& outRoomId, std::string& outError) {
+    ServerMetrics::instance().multiplayerRoomJoinsAttemptedTotal.fetch_add(1, std::memory_order_relaxed);
+
     if (playerToRoomId.find(playerId) != playerToRoomId.end()) {
         outError = "Player is already member of a room";
+        ServerMetrics::instance().multiplayerRoomJoinsFailedTotal.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
 
@@ -71,6 +81,7 @@ bool RoomManager::joinRoom(const std::string& code, uint32_t playerId, int socke
     auto cIt = codeToRoomId.find(normCode);
     if (cIt == codeToRoomId.end()) {
         outError = "Room not found";
+        ServerMetrics::instance().multiplayerRoomJoinsFailedTotal.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
 
@@ -79,11 +90,14 @@ bool RoomManager::joinRoom(const std::string& code, uint32_t playerId, int socke
 
     if (room.state != RoomState::WAITING) {
         outError = "Room is currently in progress or finished";
+        ServerMetrics::instance().multiplayerRoomJoinsFailedTotal.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
 
     if (room.isFull()) {
         outError = "Room is full";
+        ServerMetrics::instance().multiplayerRoomCapacityRejectionsTotal.fetch_add(1, std::memory_order_relaxed);
+        ServerMetrics::instance().multiplayerRoomJoinsFailedTotal.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
 
@@ -103,6 +117,8 @@ bool RoomManager::joinRoom(const std::string& code, uint32_t playerId, int socke
 
 bool RoomManager::leaveRoom(uint32_t playerId, uint32_t& outOldRoomId, bool& outRoomDestroyed,
                             uint32_t& outNewHostId, bool& outCountdownCancelled) {
+    ServerMetrics::instance().multiplayerPlayerDisconnectsTotal.fetch_add(1, std::memory_order_relaxed);
+
     outOldRoomId = 0;
     outRoomDestroyed = false;
     outNewHostId = 0;
@@ -136,6 +152,7 @@ bool RoomManager::leaveRoom(uint32_t playerId, uint32_t& outOldRoomId, bool& out
         codeToRoomId.erase(room.code);
         rooms.erase(rIt);
         outRoomDestroyed = true;
+        ServerMetrics::instance().multiplayerRoomsActive.store(rooms.size(), std::memory_order_relaxed);
         return true;
     }
 
@@ -226,6 +243,7 @@ bool RoomManager::startRace(uint32_t hostPlayerId, uint32_t& outRoomId, std::str
     room.state = RoomState::COUNTDOWN;
     room.stateStartTime = std::chrono::steady_clock::now();
     room.results.clear();
+    ServerMetrics::instance().multiplayerRaceStartsTotal.fetch_add(1, std::memory_order_relaxed);
     return true;
 }
 

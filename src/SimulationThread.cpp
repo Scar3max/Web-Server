@@ -1,4 +1,5 @@
 #include "SimulationThread.h"
+#include "ServerMetrics.h"
 #include <chrono>
 #include <iostream>
 #include <algorithm>
@@ -49,6 +50,7 @@ void SimulationThread::runLoop() {
     std::vector<PlayerInput> inputs;
 
     while (running.load(std::memory_order_relaxed)) {
+        auto tickStartTime = clock::now();
         uint64_t tick = currentTick.fetch_add(1, std::memory_order_relaxed) + 1;
         ticksInWindow++;
 
@@ -217,14 +219,28 @@ void SimulationThread::runLoop() {
                 }
 
                 // Resolve authoritative vehicle-to-vehicle collisions within this room
-                physics::resolveRoomCollisions(rsim.vehicles, track::getDefaultTrack());
+                auto colStart = clock::now();
+                std::vector<physics::CollisionEvent> colEvents;
+                physics::resolveRoomCollisions(rsim.vehicles, track::getDefaultTrack(), &colEvents);
+                auto colEnd = clock::now();
+                uint64_t colMicros = std::chrono::duration_cast<std::chrono::microseconds>(colEnd - colStart).count();
+                ServerMetrics::instance().recordCollisionSolver(colMicros, colEvents.size());
             } else if (rid == 0 && !rsim.vehicles.empty()) {
                 // Practice mode: resolve collisions between practice drivers
-                physics::resolveRoomCollisions(rsim.vehicles, track::getDefaultTrack());
+                auto colStart = clock::now();
+                std::vector<physics::CollisionEvent> colEvents;
+                physics::resolveRoomCollisions(rsim.vehicles, track::getDefaultTrack(), &colEvents);
+                auto colEnd = clock::now();
+                uint64_t colMicros = std::chrono::duration_cast<std::chrono::microseconds>(colEnd - colStart).count();
+                ServerMetrics::instance().recordCollisionSolver(colMicros, colEvents.size());
             }
         }
 
         activePlayerCount.store(totalPlayers, std::memory_order_relaxed);
+        ServerMetrics::instance().multiplayerPlayersActive.store(totalPlayers, std::memory_order_relaxed);
+        size_t practiceCount = (roomSims.find(0) != roomSims.end()) ? roomSims[0].vehicles.size() : 0;
+        ServerMetrics::instance().multiplayerPracticePlayersActive.store(practiceCount, std::memory_order_relaxed);
+        ServerMetrics::instance().simulationInputsProcessedTotal.fetch_add(inputs.size(), std::memory_order_relaxed);
 
         // 3. Publish Authoritative Room Snapshots at 20 Hz (every 3 ticks)
         if (tick % physics::Config::TICKS_PER_SNAPSHOT == 0) {
@@ -278,6 +294,23 @@ void SimulationThread::runLoop() {
             snapshotsInWindow = 0;
             lastDiagnosticTime = now;
         }
+
+        // Measure tick duration before pacing sleep
+        auto tickWorkEnd = clock::now();
+        uint64_t tickMicros = std::chrono::duration_cast<std::chrono::microseconds>(tickWorkEnd - tickStartTime).count();
+        bool missedDeadline = (tickMicros > 16667);
+        bool overrun = (now - nextTickTime > std::chrono::milliseconds(100));
+
+        ServerMetrics::instance().recordSimulationTick(tickMicros, missedDeadline, overrun);
+        ServerMetrics::instance().simulationTick.store(tick, std::memory_order_relaxed);
+        ServerMetrics::instance().simulationTickFrequencyHz.store(actualTickRate.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        ServerMetrics::instance().simulationSnapshotFrequencyHz.store(actualSnapshotRate.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        ServerMetrics::instance().simulationSnapshotsPublishedTotal.store(totalSnapshotsPublished.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        ServerMetrics::instance().simulationSnapshotQueueDepth.store(snapshotQueue.size(), std::memory_order_relaxed);
+        ServerMetrics::instance().simulationSnapshotsDroppedTotal.store(snapshotQueue.getTotalDropped(), std::memory_order_relaxed);
+        ServerMetrics::instance().simulationInputQueueDepth.store(inputQueue.size(), std::memory_order_relaxed);
+        ServerMetrics::instance().simulationLifecycleQueueOccupancy.store(inputQueue.getLifecycleQueueSize(), std::memory_order_relaxed);
+        ServerMetrics::instance().simulationLifecycleEventsRejectedTotal.store(inputQueue.getTotalJoinsRejected(), std::memory_order_relaxed);
 
         // 5. Fixed-timestep pacing
         nextTickTime += tickDuration;
