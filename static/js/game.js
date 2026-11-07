@@ -283,7 +283,9 @@ export class Game {
                 lastCorrection: predStats.lastCorrection,
                 maxCorrection: predStats.maxCorrection,
                 unackedInputs: predStats.unackedInputs,
-                extrapolations: remoteExtrapTotal
+                extrapolations: remoteExtrapTotal,
+                snapshotFormat: this.network.snapshotFormat || 'json',
+                lastSnapshotBytes: this.network.lastSnapshotBytes || 0
             };
         }
 

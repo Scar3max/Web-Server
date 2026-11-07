@@ -292,7 +292,7 @@ export class Renderer {
     drawDiagnostics(ctx, w, h, diag) {
         ctx.save();
         const boxW = 240;
-        const boxH = 145;
+        const boxH = 162;
         const x = 16;
         const y = h - boxH - 16;
 
@@ -317,6 +317,8 @@ export class Renderer {
         ctx.fillText(`Max Corr: ${diag.maxCorrection.toFixed(4)} m`, x + 12, y + 102);
         ctx.fillText(`Unacked Inputs: ${diag.unackedInputs}`, x + 12, y + 118);
         ctx.fillText(`Remote Extrap: ${diag.extrapolations}`, x + 12, y + 134);
+        const protoText = (diag.snapshotFormat || 'json').toUpperCase();
+        ctx.fillText(`Protocol: ${protoText} (${diag.lastSnapshotBytes || 0} B)`, x + 12, y + 150);
 
         ctx.restore();
     }

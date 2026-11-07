@@ -38,6 +38,11 @@ export class NetworkManager {
         // Input throttle
         this.lastSendTime = 0;
         this.sendInterval = 16; // ~60 Hz input transmission
+
+        // Diagnostics & Optimization Stats (Phase 7.1)
+        this.snapshotFormat = 'json';
+        this.lastSnapshotBytes = 0;
+        this.snapshotBytesTotal = 0;
     }
 
     connect() {
@@ -50,10 +55,11 @@ export class NetworkManager {
 
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const host = window.location.host || 'localhost:8080';
-        const wsUrl = `${protocol}//${host}/ws`;
+        const wsUrl = `${protocol}//${host}/ws?format=binary`;
 
         try {
             this.socket = new WebSocket(wsUrl);
+            this.socket.binaryType = 'arraybuffer';
 
             this.socket.onopen = (e) => this.handleOpen(e);
             this.socket.onmessage = (e) => this.handleMessage(e);
@@ -65,6 +71,87 @@ export class NetworkManager {
         }
     }
 
+    decodeBinarySnapshot(buffer) {
+        if (!buffer || buffer.byteLength < 36) return null;
+        const view = new DataView(buffer);
+
+        // Magic 0x534E4150 ('SNAP')
+        const magic = view.getUint32(0, false);
+        if (magic !== 0x534E4150) return null;
+
+        const version = view.getUint8(4);
+        if (version !== 1) return null;
+
+        const roomStateNum = view.getUint8(5);
+        const stateNames = ['WAITING', 'COUNTDOWN', 'RACING', 'FINISHED'];
+        const state = stateNames[roomStateNum] || 'WAITING';
+
+        const countdownRaw = view.getUint16(6, false);
+        const countdown = countdownRaw / 10.0;
+
+        const roomId = view.getUint32(8, false);
+
+        // RoomCode (8 bytes null-terminated ASCII)
+        const decoder = new TextDecoder('utf-8');
+        const codeBytes = new Uint8Array(buffer, 12, 8);
+        const roomCode = decoder.decode(codeBytes).replace(/\0/g, '');
+
+        const tick = view.getUint32(20, false);
+        const timestampHigh = view.getUint32(24, false);
+        const timestampLow = view.getUint32(28, false);
+        const timestamp = (timestampHigh * 4294967296) + timestampLow;
+
+        const playerCount = view.getUint16(32, false);
+        const resultCount = view.getUint16(34, false);
+
+        let offset = 36;
+        const players = [];
+        for (let i = 0; i < playerCount; i++) {
+            if (offset + 36 > buffer.byteLength) break;
+            const id = view.getUint32(offset, false);
+            const x = view.getFloat32(offset + 4, false);
+            const distance = view.getFloat32(offset + 8, false);
+            const speed = view.getFloat32(offset + 12, false);
+            const steer = view.getFloat32(offset + 16, false);
+            const worldX = view.getFloat32(offset + 20, false);
+            const worldY = view.getFloat32(offset + 24, false);
+            const heading = view.getFloat32(offset + 28, false);
+            const ackSeq = view.getUint32(offset + 32, false);
+            offset += 36;
+
+            players.push({ id, x, distance, speed, steer, worldX, worldY, heading, ackSeq });
+        }
+
+        const results = [];
+        for (let i = 0; i < resultCount; i++) {
+            if (offset + 11 > buffer.byteLength) break;
+            const playerId = view.getUint32(offset, false);
+            const rank = view.getUint16(offset + 4, false);
+            const finishTime = view.getFloat32(offset + 6, false);
+            const nameLen = view.getUint8(offset + 10);
+            offset += 11;
+
+            let name = '';
+            if (nameLen > 0 && offset + nameLen <= buffer.byteLength) {
+                name = decoder.decode(new Uint8Array(buffer, offset, nameLen));
+                offset += nameLen;
+            }
+            results.push({ playerId, name, rank, finishTime });
+        }
+
+        return {
+            type: 'snapshot',
+            roomId,
+            roomCode,
+            state,
+            countdown,
+            tick,
+            timestamp,
+            players,
+            results
+        };
+    }
+
     handleOpen(e) {
         this.reconnectAttempts = 0;
         this.updateStatus('CONNECTED', 'Connected to /ws');
@@ -72,7 +159,22 @@ export class NetworkManager {
 
     handleMessage(e) {
         try {
-            const data = JSON.parse(e.data);
+            let data = null;
+            if (e.data instanceof ArrayBuffer) {
+                data = this.decodeBinarySnapshot(e.data);
+                this.snapshotFormat = 'binary';
+                this.lastSnapshotBytes = e.data.byteLength;
+                this.snapshotBytesTotal += e.data.byteLength;
+            } else if (typeof e.data === 'string') {
+                data = JSON.parse(e.data);
+                if (data.type === 'snapshot') {
+                    this.snapshotFormat = 'json';
+                    this.lastSnapshotBytes = e.data.length;
+                    this.snapshotBytesTotal += e.data.length;
+                }
+            }
+
+            if (!data) return;
 
             if (data.type === 'welcome') {
                 this.localPlayerId = data.playerId;
