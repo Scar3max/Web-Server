@@ -186,6 +186,15 @@ std::string WebSocketFrame::encodeTextFrame(const std::string& text, bool fin) {
     return encodeFrame(OPCODE_TEXT, text, fin);
 }
 
+std::string WebSocketFrame::encodeBinaryFrame(const std::string& payload, bool fin) {
+    return encodeFrame(OPCODE_BINARY, payload, fin);
+}
+
+std::string WebSocketFrame::encodeBinaryFrame(const uint8_t* data, size_t len, bool fin) {
+    std::string payload(reinterpret_cast<const char*>(data), len);
+    return encodeFrame(OPCODE_BINARY, payload, fin);
+}
+
 std::string WebSocketFrame::encodePongFrame(const std::string& payload) {
     return encodeFrame(OPCODE_PONG, payload, true);
 }

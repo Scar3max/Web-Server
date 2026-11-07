@@ -19,10 +19,16 @@ enum class ConnectionProtocol {
 
 class Connection {
 public:
+    enum class SnapshotFormat {
+        JSON,
+        BINARY
+    };
+
     int fd = -1;
     uint64_t id = 0;
     ConnectionState state = ConnectionState::READING_REQUEST;
     ConnectionProtocol protocol = ConnectionProtocol::HTTP;
+    SnapshotFormat snapshotFormat = SnapshotFormat::JSON;
 
     std::string inBuffer;
     std::string outBuffer;

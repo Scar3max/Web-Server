@@ -62,6 +62,8 @@ public:
 
     // Convenience encoders
     static std::string encodeTextFrame(const std::string& text, bool fin = true);
+    static std::string encodeBinaryFrame(const std::string& payload, bool fin = true);
+    static std::string encodeBinaryFrame(const uint8_t* data, size_t len, bool fin = true);
     static std::string encodePongFrame(const std::string& payload);
     static std::string encodeCloseFrame(uint16_t statusCode = CLOSE_NORMAL, const std::string& reason = "");
 

@@ -1,45 +1,45 @@
 #include "SnapshotQueue.h"
 #include <unistd.h>
-#include <sstream>
-#include <iomanip>
+#include <cstdio>
+#include <algorithm>
 #include <unordered_map>
 
 std::string WorldSnapshot::toJson() const {
-    std::ostringstream oss;
-    oss << "{\"type\":\"snapshot\",\"roomId\":" << roomId
-        << ",\"roomCode\":\"" << roomCode << "\""
-        << ",\"state\":\"" << roomStateToString(roomState) << "\""
-        << ",\"countdown\":" << std::fixed << std::setprecision(1) << countdown
-        << ",\"tick\":" << tick
-        << ",\"timestamp\":" << timestamp
-        << ",\"players\":[";
+    std::string out;
+    out.reserve(256 + players.size() * 140 + results.size() * 64);
+    char buf[256];
+    int n = std::snprintf(buf, sizeof(buf),
+        "{\"type\":\"snapshot\",\"roomId\":%u,\"roomCode\":\"%s\",\"state\":\"%s\",\"countdown\":%.1f,\"tick\":%llu,\"timestamp\":%llu,\"players\":[",
+        roomId, roomCode.c_str(), roomStateToString(roomState), countdown,
+        static_cast<unsigned long long>(tick), static_cast<unsigned long long>(timestamp));
+    if (n > 0) {
+        out.append(buf, static_cast<size_t>(n));
+    }
 
     for (size_t i = 0; i < players.size(); i++) {
-        if (i > 0) oss << ",";
+        if (i > 0) out.push_back(',');
         const auto& p = players[i];
-        oss << "{\"id\":" << p.id
-            << ",\"x\":" << std::fixed << std::setprecision(4) << p.x
-            << ",\"distance\":" << std::fixed << std::setprecision(2) << p.distance
-            << ",\"speed\":" << std::fixed << std::setprecision(2) << p.speed
-            << ",\"steer\":" << std::fixed << std::setprecision(4) << p.steer
-            << ",\"worldX\":" << std::fixed << std::setprecision(2) << p.worldX
-            << ",\"worldY\":" << std::fixed << std::setprecision(2) << p.worldY
-            << ",\"heading\":" << std::fixed << std::setprecision(4) << p.heading
-            << ",\"ackSeq\":" << p.ackSeq
-            << "}";
+        n = std::snprintf(buf, sizeof(buf),
+            "{\"id\":%u,\"x\":%.4f,\"distance\":%.2f,\"speed\":%.2f,\"steer\":%.4f,\"worldX\":%.2f,\"worldY\":%.2f,\"heading\":%.4f,\"ackSeq\":%llu}",
+            p.id, p.x, p.distance, p.speed, p.steer, p.worldX, p.worldY, p.heading,
+            static_cast<unsigned long long>(p.ackSeq));
+        if (n > 0) {
+            out.append(buf, static_cast<size_t>(n));
+        }
     }
-    oss << "],\"results\":[";
+    out.append("],\"results\":[");
     for (size_t i = 0; i < results.size(); i++) {
-        if (i > 0) oss << ",";
+        if (i > 0) out.push_back(',');
         const auto& r = results[i];
-        oss << "{\"playerId\":" << r.playerId
-            << ",\"name\":\"" << r.name << "\""
-            << ",\"rank\":" << r.rank
-            << ",\"finishTime\":" << std::fixed << std::setprecision(3) << r.finishTime
-            << "}";
+        n = std::snprintf(buf, sizeof(buf),
+            "{\"playerId\":%u,\"name\":\"%s\",\"rank\":%u,\"finishTime\":%.3f}",
+            r.playerId, r.name.c_str(), r.rank, r.finishTime);
+        if (n > 0) {
+            out.append(buf, static_cast<size_t>(n));
+        }
     }
-    oss << "]}";
-    return oss.str();
+    out.append("]}");
+    return out;
 }
 
 void SnapshotQueue::push(WorldSnapshot snapshot) {
