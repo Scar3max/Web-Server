@@ -2,6 +2,9 @@
  * Game — Consumes server-authoritative snapshots and drives
  * smooth client-side interpolation and input streaming.
  */
+
+import { defaultTrack } from './track.js';
+
 export class Game {
     constructor(canvas, inputManager, renderer, networkManager, uiElements) {
         this.canvas = canvas;
@@ -10,6 +13,7 @@ export class Game {
         this.network = networkManager;
         this.ui = uiElements;
 
+        this.track = defaultTrack;
         this.isPaused = false;
         this.isRunning = false;
         this.allowDriving = false;
@@ -24,12 +28,16 @@ export class Game {
         this.localSpeed = 0.0;      // km/h
         this.localDistance = 0.0;   // meters
         this.localSteer = 0.0;      // radians
+        this.localWorldX = 0.0;
+        this.localWorldY = 0.0;
+        this.localHeading = Math.PI / 2;
         this.roadOffset = 0.0;
 
-        this.lapLength = 1500;      // meters per lap
-        this.pixelsPerMeter = 6.0;  // Visual scale for relative distance
+        this.trackLength = this.track.getTotalLength();
+        this.lapLength = this.trackLength;
+        this.pixelsPerMeter = 16.0;  // Scale matching renderer
 
-        // Player interpolation states: Map<id, { renderX, renderDist, renderSpeed, renderSteer, targetX, targetDist, targetSpeed, targetSteer, lastSeen }>
+        // Player interpolation states: Map<id, { renderX, renderDist, renderSpeed, renderSteer, renderWorldX, renderWorldY, renderHeading, ... }>
         this.players = new Map();
 
         // Wire network handlers
@@ -82,25 +90,41 @@ export class Game {
             activeIds.add(sp.id);
 
             let state = this.players.get(sp.id);
+            const wPos = (sp.worldX !== undefined && sp.worldY !== undefined)
+                ? { x: sp.worldX, y: sp.worldY, angle: (sp.heading !== undefined ? sp.heading : 0) }
+                : this.track.toWorldPosition(sp.distance, sp.x);
+            const heading = (sp.heading !== undefined) ? sp.heading : (wPos.angle + (sp.steer || 0));
+
             if (!state) {
                 state = {
                     id: sp.id,
+                    name: sp.name || null,
                     renderX: sp.x,
                     renderDist: sp.distance,
                     renderSpeed: sp.speed,
                     renderSteer: sp.steer,
+                    renderWorldX: wPos.x,
+                    renderWorldY: wPos.y,
+                    renderHeading: heading,
                     targetX: sp.x,
                     targetDist: sp.distance,
                     targetSpeed: sp.speed,
                     targetSteer: sp.steer,
+                    targetWorldX: wPos.x,
+                    targetWorldY: wPos.y,
+                    targetHeading: heading,
                     controls: { up: false, down: false, left: false, right: false }
                 };
                 this.players.set(sp.id, state);
             } else {
+                if (sp.name) state.name = sp.name;
                 state.targetX = sp.x;
                 state.targetDist = sp.distance;
                 state.targetSpeed = sp.speed;
                 state.targetSteer = sp.steer;
+                state.targetWorldX = wPos.x;
+                state.targetWorldY = wPos.y;
+                state.targetHeading = heading;
             }
         }
 
@@ -160,11 +184,20 @@ export class Game {
             p.renderSpeed += (p.targetSpeed - p.renderSpeed) * lerpFactor;
             p.renderSteer += (p.targetSteer - p.renderSteer) * lerpFactor;
 
+            // Project smoothly onto curved track centerline and normal
+            const curPos = this.track.toWorldPosition(p.renderDist, p.renderX);
+            p.renderWorldX = curPos.x;
+            p.renderWorldY = curPos.y;
+            p.renderHeading = curPos.angle + p.renderSteer;
+
             if (id === this.localPlayerId) {
                 this.localX = p.renderX;
                 this.localDistance = p.renderDist;
                 this.localSpeed = p.renderSpeed;
                 this.localSteer = p.renderSteer;
+                this.localWorldX = p.renderWorldX;
+                this.localWorldY = p.renderWorldY;
+                this.localHeading = p.renderHeading;
                 p.controls = controls;
             }
         }
@@ -178,58 +211,52 @@ export class Game {
     }
 
     render() {
-        const w = this.renderer.width;
-        const h = this.renderer.height;
-        const roadCenter = w / 2;
-        const roadHalf = this.renderer.roadWidth / 2;
-        const usableHalf = roadHalf - 30;
-        const localY = h * 0.75;
-
         const renderList = [];
 
-        // Compute screen coordinates for each active player
+        // Build list of all players with world-space coordinates
         for (const [id, p] of this.players) {
             const isLocal = (id === this.localPlayerId);
-            const pixelX = roadCenter + (p.renderX * usableHalf);
-
-            let pixelY = localY;
-            if (!isLocal) {
-                const deltaMeters = p.renderDist - this.localDistance;
-                pixelY = localY - (deltaMeters * this.pixelsPerMeter);
-            }
-
-            // Cull vehicles far off-screen
-            if (pixelY >= -120 && pixelY <= h + 120) {
-                renderList.push({
-                    id: p.id,
-                    isLocal: isLocal,
-                    x: pixelX,
-                    y: pixelY,
-                    steerAngle: p.renderSteer,
-                    speed: p.renderSpeed,
-                    controls: p.controls
-                });
-            }
+            renderList.push({
+                id: p.id,
+                isLocal: isLocal,
+                name: p.name,
+                worldX: p.renderWorldX,
+                worldY: p.renderWorldY,
+                heading: p.renderHeading,
+                distance: p.renderDist,
+                speed: p.renderSpeed,
+                controls: p.controls
+            });
         }
 
         // If local player hasn't received first snapshot yet, render placeholder at start
         if (renderList.length === 0) {
+            const startPos = this.track.toWorldPosition(0, 0);
             renderList.push({
                 id: 1,
                 isLocal: true,
-                x: roadCenter,
-                y: localY,
-                steerAngle: 0,
+                name: 'YOU',
+                worldX: startPos.x,
+                worldY: startPos.y,
+                heading: startPos.angle,
+                distance: 0,
                 speed: 0,
                 controls: { up: false, down: false, left: false, right: false }
             });
         }
 
+        const localPlayer = renderList.find(p => p.isLocal) || renderList[0];
+
         const gameState = {
             players: renderList,
+            localPlayer: localPlayer,
             speed: this.localSpeed,
+            trackLength: this.trackLength,
             roadOffset: this.roadOffset
         };
+
+        this.renderer.render(gameState);
+    }
 
         this.renderer.render(gameState);
     }

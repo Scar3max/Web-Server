@@ -1,6 +1,10 @@
 /**
- * Renderer — Canvas-based arcade racing track and multi-player car rendering.
+ * Renderer — Canvas-based curved track and multi-player vehicle rendering.
+ * Transforms world coordinates to a smooth chase-camera view following the player.
  */
+
+import { defaultTrack } from './track.js';
+
 export class Renderer {
     constructor(canvas) {
         this.canvas = canvas;
@@ -8,8 +12,8 @@ export class Renderer {
         this.width = canvas.width;
         this.height = canvas.height;
 
-        this.roadWidth = 500;
-        this.roadSegmentLength = 60; // Distance between lane stripes
+        this.pixelsPerMeter = 16.0; // World meters to screen pixels scale
+        this.track = defaultTrack;
 
         this.carPalettes = [
             { main: '#0284c7', glow: '#38bdf8', label: 'YOU' },       // Cyan (Local Player)
@@ -36,202 +40,242 @@ export class Renderer {
         const w = this.width;
         const h = this.height;
 
-        // Clear backdrop (grass / track shoulders)
+        // 1. Clear Backdrop (Grass / terrain)
         ctx.fillStyle = '#08170e';
         ctx.fillRect(0, 0, w, h);
 
-        // Draw parallax grass / gravel shoulder patterns
-        this.drawShoulders(ctx, w, h, gameState.roadOffset);
+        const localCar = gameState.localPlayer;
+        const localDist = localCar ? localCar.distance : 0.0;
+        const localHeading = localCar ? localCar.heading : Math.PI / 2;
+        const localWorldX = localCar ? localCar.worldX : 0.0;
+        const localWorldY = localCar ? localCar.worldY : 0.0;
 
-        // Draw main asphalt road
-        const roadLeft = (w - this.roadWidth) / 2;
-        const roadRight = roadLeft + this.roadWidth;
+        // 2. Camera Setup: Center at screen (w/2, h * 0.72) and rotate to align with track forward
+        ctx.save();
+        ctx.translate(w * 0.5, h * 0.72);
+        // Rotate so track tangent points UP (-Y in canvas space)
+        ctx.rotate(-localHeading - Math.PI / 2);
+        ctx.scale(this.pixelsPerMeter, this.pixelsPerMeter);
+        ctx.translate(-localWorldX, -localWorldY);
 
-        ctx.fillStyle = '#1e2530';
-        ctx.fillRect(roadLeft, 0, this.roadWidth, h);
+        // 3. Render Curved Road Geometry
+        this.renderCurvedRoad(ctx, localDist, gameState.trackLength || 1500.0);
 
-        // Draw Rumble Strips (red & white curbs) on road borders
-        this.drawCurb(ctx, roadLeft - 18, 18, h, gameState.roadOffset);
-        this.drawCurb(ctx, roadRight, 18, h, gameState.roadOffset);
-
-        // Draw Lane Markings (scrolling vertically based on roadOffset)
-        this.drawLaneDashes(ctx, roadLeft, roadRight, h, gameState.roadOffset);
-
-        // High speed wind/speed lines effect
-        if (gameState.speed > 80) {
-            this.drawSpeedLines(ctx, w, h, gameState.speed);
-        }
-
-        // Draw all active players in the authoritative simulation world
+        // 4. Render All Active Vehicles
         if (gameState.players && gameState.players.length > 0) {
-            // Draw remote players first, then local player on top
+            // Sort so remote players draw first, local player on top
             const sortedPlayers = [...gameState.players].sort((a, b) => {
                 if (a.isLocal) return 1;
                 if (b.isLocal) return -1;
-                return b.y - a.y; // Painter's algorithm
+                return b.distance - a.distance;
             });
 
             for (const p of sortedPlayers) {
                 const paletteIdx = p.isLocal ? 0 : (((p.id - 1) % (this.carPalettes.length - 1)) + 1);
                 const palette = this.carPalettes[paletteIdx];
-                const label = p.isLocal ? "YOU" : `Player ${p.id}`;
+                const label = p.isLocal ? "YOU" : (p.name || `Player ${p.id}`);
 
-                this.drawCar(ctx, p.x, p.y, p.steerAngle, p.controls, palette, label, p.isLocal);
+                this.drawVehicle(ctx, p.worldX, p.worldY, p.heading, p.controls, palette, label, p.isLocal);
             }
         }
-    }
 
-    drawShoulders(ctx, w, h, roadOffset) {
-        const stripeHeight = 80;
-        const offset = roadOffset % (stripeHeight * 2);
+        ctx.restore();
 
-        ctx.fillStyle = '#0b1f13';
-        for (let y = -stripeHeight * 2; y < h + stripeHeight; y += stripeHeight * 2) {
-            ctx.fillRect(0, y + offset, w, stripeHeight);
+        // 5. Screen-Space Overlay Effects (Speed Lines at high velocity)
+        if (gameState.speed > 80) {
+            this.drawSpeedLines(ctx, w, h, gameState.speed);
         }
     }
 
-    drawCurb(ctx, x, width, h, roadOffset) {
-        const curbSegment = 40;
-        const offset = roadOffset % (curbSegment * 2);
+    renderCurvedRoad(ctx, localDist, trackLength) {
+        const stepDist = 3.5; // Meters between curve evaluation samples
+        const lookBack = 45.0; // Distance behind camera
+        const lookAhead = 260.0; // Distance in front of camera
 
-        for (let y = -curbSegment * 2; y < h + curbSegment; y += curbSegment) {
-            const isRed = Math.floor((y - offset) / curbSegment) % 2 === 0;
-            ctx.fillStyle = isRed ? '#dc2626' : '#f8fafc';
-            ctx.fillRect(x, y + offset, width, curbSegment);
+        const sStart = Math.max(0.0, localDist - lookBack);
+        const sEnd = localDist + lookAhead;
+
+        const halfWidth = this.track.getTrackWidth() * 0.5;
+        const curbWidth = 1.2;
+
+        let prevSample = this.track.sampleAtDistance(sStart);
+
+        for (let s = sStart + stepDist; s <= sEnd; s += stepDist) {
+            const currSample = this.track.sampleAtDistance(s);
+
+            const p0_center = prevSample.center;
+            const p0_norm = prevSample.normal;
+            const p1_center = currSample.center;
+            const p1_norm = currSample.normal;
+
+            // Road Edge Vertices
+            const p0_L = { x: p0_center.x - p0_norm.x * halfWidth, y: p0_center.y - p0_norm.y * halfWidth };
+            const p0_R = { x: p0_center.x + p0_norm.x * halfWidth, y: p0_center.y + p0_norm.y * halfWidth };
+            const p1_L = { x: p1_center.x - p1_norm.x * halfWidth, y: p1_center.y - p1_norm.y * halfWidth };
+            const p1_R = { x: p1_center.x + p1_norm.x * halfWidth, y: p1_center.y + p1_norm.y * halfWidth };
+
+            // Outer Curbs
+            const p0_curbL = { x: p0_L.x - p0_norm.x * curbWidth, y: p0_L.y - p0_norm.y * curbWidth };
+            const p1_curbL = { x: p1_L.x - p1_norm.x * curbWidth, y: p1_L.y - p1_norm.y * curbWidth };
+            const p0_curbR = { x: p0_R.x + p0_norm.x * curbWidth, y: p0_R.y + p0_norm.y * curbWidth };
+            const p1_curbR = { x: p1_R.x + p1_norm.x * curbWidth, y: p1_R.y + p1_norm.y * curbWidth };
+
+            const isRedCurb = Math.floor(s / 6.0) % 2 === 0;
+
+            // Draw Left Curb
+            ctx.fillStyle = isRedCurb ? '#dc2626' : '#f8fafc';
+            ctx.beginPath();
+            ctx.moveTo(p0_curbL.x, p0_curbL.y);
+            ctx.lineTo(p0_L.x, p0_L.y);
+            ctx.lineTo(p1_L.x, p1_L.y);
+            ctx.lineTo(p1_curbL.x, p1_curbL.y);
+            ctx.closePath();
+            ctx.fill();
+
+            // Draw Right Curb
+            ctx.beginPath();
+            ctx.moveTo(p0_R.x, p0_R.y);
+            ctx.lineTo(p0_curbR.x, p0_curbR.y);
+            ctx.lineTo(p1_curbR.x, p1_curbR.y);
+            ctx.lineTo(p1_R.x, p1_R.y);
+            ctx.closePath();
+            ctx.fill();
+
+            // Draw Main Asphalt Surface
+            ctx.fillStyle = '#1e2530';
+            ctx.beginPath();
+            ctx.moveTo(p0_L.x, p0_L.y);
+            ctx.lineTo(p0_R.x, p0_R.y);
+            ctx.lineTo(p1_R.x, p1_R.y);
+            ctx.lineTo(p1_L.x, p1_L.y);
+            ctx.closePath();
+            ctx.fill();
+
+            // Draw White Outer Road Edge Markings
+            ctx.strokeStyle = '#f8fafc';
+            ctx.lineWidth = 0.22;
+            ctx.beginPath();
+            ctx.moveTo(p0_L.x, p0_L.y);
+            ctx.lineTo(p1_L.x, p1_L.y);
+            ctx.moveTo(p0_R.x, p0_R.y);
+            ctx.lineTo(p1_R.x, p1_R.y);
+            ctx.stroke();
+
+            // Draw Yellow Center Dashes
+            const isDash = Math.floor(s / 5.0) % 2 === 0;
+            if (isDash) {
+                ctx.strokeStyle = '#fbbf24';
+                ctx.lineWidth = 0.25;
+                ctx.beginPath();
+                ctx.moveTo(p0_center.x, p0_center.y);
+                ctx.lineTo(p1_center.x, p1_center.y);
+                ctx.stroke();
+            }
+
+            // Draw Finish Line Banner if within segment
+            if (trackLength > 0 && prevSample.distance <= trackLength && currSample.distance >= trackLength) {
+                this.drawFinishLine(ctx, currSample, halfWidth);
+            }
+
+            prevSample = currSample;
         }
     }
 
-    drawLaneDashes(ctx, left, right, h, roadOffset) {
-        const dashHeight = 40;
-        const dashSpacing = 80;
-        const cycle = dashHeight + dashSpacing;
-        const offset = roadOffset % cycle;
+    drawFinishLine(ctx, sample, halfWidth) {
+        ctx.save();
+        ctx.translate(sample.center.x, sample.center.y);
+        ctx.rotate(sample.angle + Math.PI / 2);
 
-        const laneWidth = this.roadWidth / 3;
-        const lane1X = left + laneWidth;
-        const lane2X = left + laneWidth * 2;
+        const checkW = 1.0;
+        const totalW = halfWidth * 2;
+        const numChecks = Math.floor(totalW / checkW);
 
-        ctx.fillStyle = '#fbbf24';
-        for (let y = -cycle; y < h + cycle; y += cycle) {
-            ctx.fillRect(lane1X - 3, y + offset, 6, dashHeight);
-            ctx.fillRect(lane2X - 3, y + offset, 6, dashHeight);
+        for (let i = -numChecks / 2; i < numChecks / 2; i++) {
+            const isWhite = (Math.floor(i) % 2 === 0);
+            ctx.fillStyle = isWhite ? '#f8fafc' : '#0f172a';
+            ctx.fillRect(i * checkW, -1.0, checkW, 2.0);
         }
 
-        // Outer solid white road edge lines
-        ctx.fillStyle = '#f8fafc';
-        ctx.fillRect(left + 6, 0, 4, h);
-        ctx.fillRect(right - 10, 0, 4, h);
+        ctx.restore();
     }
 
-    drawCar(ctx, x, y, steerAngle, controls, palette, label, isLocal) {
+    drawVehicle(ctx, x, y, heading, controls, palette, label, isLocal) {
         ctx.save();
         ctx.translate(x, y);
 
-        // Player Tag / Nametag
-        ctx.font = '600 11px Outfit, sans-serif';
+        // Nametag in world space (rendered readable above vehicle)
+        ctx.save();
+        ctx.scale(1 / this.pixelsPerMeter, 1 / this.pixelsPerMeter);
+        ctx.font = '600 12px Outfit, sans-serif';
         ctx.textAlign = 'center';
         ctx.fillStyle = isLocal ? '#38bdf8' : '#cbd5e1';
-        ctx.fillText(label, 0, -56);
+        ctx.fillText(label, 0, -42);
+        ctx.restore();
 
-        ctx.rotate(steerAngle);
+        // Rotate vehicle along world heading
+        ctx.rotate(heading);
 
-        const carW = 44;
-        const carH = 78;
-
-        // Headlight Beams
-        const beamGradient = ctx.createLinearGradient(0, -carH / 2, 0, -carH / 2 - 160);
-        beamGradient.addColorStop(0, 'rgba(255, 255, 255, 0.45)');
-        beamGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
-
-        ctx.fillStyle = beamGradient;
-        ctx.beginPath();
-        ctx.moveTo(-16, -carH / 2);
-        ctx.lineTo(-45, -carH / 2 - 160);
-        ctx.lineTo(45, -carH / 2 - 160);
-        ctx.lineTo(16, -carH / 2);
-        ctx.closePath();
-        ctx.fill();
+        const carLength = 4.2; // meters
+        const carWidth = 2.0;  // meters
 
         // Drop shadow
         ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
         ctx.beginPath();
-        ctx.roundRect(-carW / 2 - 4, -carH / 2 + 6, carW + 8, carH + 4, 10);
+        ctx.roundRect(-carLength * 0.5 - 0.2, -carWidth * 0.5 + 0.2, carLength + 0.4, carWidth + 0.2, 0.4);
         ctx.fill();
 
         // 4 Wheels
         ctx.fillStyle = '#0f172a';
-        this.drawWheel(ctx, -carW / 2 - 3, -carH / 2 + 14, steerAngle * 1.5);
-        this.drawWheel(ctx, carW / 2 + 3, -carH / 2 + 14, steerAngle * 1.5);
-        this.drawWheel(ctx, -carW / 2 - 3, carH / 2 - 20, 0);
-        this.drawWheel(ctx, carW / 2 + 3, carH / 2 - 20, 0);
+        ctx.fillRect(-carLength * 0.35, -carWidth * 0.5 - 0.15, 0.9, 0.3);
+        ctx.fillRect(carLength * 0.35 - 0.9, -carWidth * 0.5 - 0.15, 0.9, 0.3);
+        ctx.fillRect(-carLength * 0.35, carWidth * 0.5 - 0.15, 0.9, 0.3);
+        ctx.fillRect(carLength * 0.35 - 0.9, carWidth * 0.5 - 0.15, 0.9, 0.3);
 
-        // Main Car Body
-        const bodyGrad = ctx.createLinearGradient(-carW / 2, 0, carW / 2, 0);
+        // Main Car Body (Length along +X in local car space)
+        const bodyGrad = ctx.createLinearGradient(0, -carWidth * 0.5, 0, carWidth * 0.5);
         bodyGrad.addColorStop(0, palette.main);
         bodyGrad.addColorStop(0.5, palette.glow);
         bodyGrad.addColorStop(1, palette.main);
 
         ctx.fillStyle = bodyGrad;
         ctx.beginPath();
-        ctx.roundRect(-carW / 2, -carH / 2, carW, carH, [12, 12, 8, 8]);
+        ctx.roundRect(-carLength * 0.5, -carWidth * 0.5, carLength, carWidth, 0.5);
         ctx.fill();
 
         // Racing Stripe
         ctx.fillStyle = '#f8fafc';
-        ctx.fillRect(-4, -carH / 2, 8, carH);
+        ctx.fillRect(-carLength * 0.5, -0.18, carLength, 0.36);
 
         // Cockpit / Windshield
         ctx.fillStyle = '#0f172a';
         ctx.beginPath();
-        ctx.roundRect(-carW / 2 + 6, -carH / 2 + 20, carW - 12, 28, [6, 6, 4, 4]);
+        ctx.roundRect(-carLength * 0.15, -carWidth * 0.35, carLength * 0.45, carWidth * 0.7, 0.25);
         ctx.fill();
 
-        // Windshield reflection
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.25)';
-        ctx.beginPath();
-        ctx.moveTo(-carW / 2 + 8, -carH / 2 + 22);
-        ctx.lineTo(0, -carH / 2 + 22);
-        ctx.lineTo(-6, -carH / 2 + 34);
-        ctx.lineTo(-carW / 2 + 8, -carH / 2 + 34);
-        ctx.closePath();
-        ctx.fill();
-
-        // Headlights
+        // Headlights (Front is +X in local car coordinate frame)
         ctx.fillStyle = '#fef08a';
-        ctx.fillRect(-carW / 2 + 4, -carH / 2 + 2, 8, 4);
-        ctx.fillRect(carW / 2 - 12, -carH / 2 + 2, 8, 4);
+        ctx.fillRect(carLength * 0.5 - 0.15, -carWidth * 0.42, 0.2, 0.3);
+        ctx.fillRect(carLength * 0.5 - 0.15, carWidth * 0.12, 0.2, 0.3);
 
         // Taillights
         const isBraking = controls && controls.down;
         ctx.fillStyle = isBraking ? '#ff1e1e' : '#991b1b';
-        ctx.fillRect(-carW / 2 + 4, carH / 2 - 4, 10, 4);
-        ctx.fillRect(carW / 2 - 14, carH / 2 - 4, 10, 4);
+        ctx.fillRect(-carLength * 0.5 - 0.05, -carWidth * 0.42, 0.15, 0.3);
+        ctx.fillRect(-carLength * 0.5 - 0.05, carWidth * 0.12, 0.15, 0.3);
 
-        ctx.restore();
-    }
-
-    drawWheel(ctx, x, y, angle) {
-        ctx.save();
-        ctx.translate(x, y);
-        ctx.rotate(angle);
-        ctx.fillStyle = '#1e293b';
-        ctx.fillRect(-4, -8, 8, 16);
-        ctx.fillStyle = '#64748b';
-        ctx.fillRect(-1, -6, 2, 12);
         ctx.restore();
     }
 
     drawSpeedLines(ctx, w, h, speed) {
-        const count = Math.min(18, Math.floor((speed - 80) / 10));
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+        const count = Math.min(20, Math.floor((speed - 80) / 8));
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
         ctx.lineWidth = 2;
         ctx.beginPath();
         for (let i = 0; i < count; i++) {
-            const lx = Math.random() * (w * 0.2);
-            const rx = w - Math.random() * (w * 0.2);
+            const lx = Math.random() * (w * 0.25);
+            const rx = w - Math.random() * (w * 0.25);
             const y1 = Math.random() * h;
-            const len = 30 + Math.random() * 60;
+            const len = 30 + Math.random() * 80;
             ctx.moveTo(lx, y1);
             ctx.lineTo(lx, y1 + len);
             ctx.moveTo(rx, y1);
