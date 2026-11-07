@@ -99,6 +99,12 @@ echo "10.4 Running Phase 7 Server Observability & Metrics Tests"
 echo "=================================================="
 python3 tests/test_phase7_metrics.py
 
+echo ""
+echo "=================================================="
+echo "10.5 Running Phase 7.1 WebSocket Fan-Out & Bandwidth Optimization Tests"
+echo "=================================================="
+python3 tests/test_phase7_1_optimization.py
+
 
 
 echo ""
