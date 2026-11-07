@@ -76,3 +76,20 @@ add_executable(server_asan
 target_compile_options(server_asan PRIVATE -fsanitize=address,undefined -g -O1)
 target_link_options(server_asan PRIVATE -fsanitize=address,undefined)
 target_link_libraries(server_asan ${CMAKE_DL_LIBS})
+
+# Phase 6.1 Collision Stability and Penetration Verification Binary
+add_executable(test_collision_stability
+    tests/test_collision_stability.cpp
+    src/Physics.cpp
+    src/Track.cpp
+)
+target_link_libraries(test_collision_stability ${CMAKE_DL_LIBS})
+
+# Phase 6.1 Server Track Parity Binary
+add_executable(track_parity_cpp
+    tests/track_parity_cpp.cpp
+    src/Track.cpp
+)
+target_link_libraries(track_parity_cpp ${CMAKE_DL_LIBS})
+
+
