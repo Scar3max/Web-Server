@@ -50,3 +50,26 @@ add_executable(server_tsan
 target_compile_options(server_tsan PRIVATE -fsanitize=thread -g -O1)
 target_link_options(server_tsan PRIVATE -fsanitize=thread)
 target_link_libraries(server_tsan ${CMAKE_DL_LIBS})
+
+# AddressSanitizer & LeakSanitizer build of the full server for comprehensive memory safety verification
+add_executable(server_asan
+    src/main.cpp
+    src/Connection.cpp
+    src/HttpParser.cpp
+    src/Router.cpp
+    src/FileManager.cpp
+    src/Logger.cpp
+    src/TaskQueue.cpp
+    src/ResponseQueue.cpp
+    src/ThreadPool.cpp
+    src/WebSocketHandshake.cpp
+    src/WebSocketFrame.cpp
+    src/Json.cpp
+    src/Physics.cpp
+    src/SnapshotQueue.cpp
+    src/SimulationThread.cpp
+    src/RoomManager.cpp
+)
+target_compile_options(server_asan PRIVATE -fsanitize=address,undefined -g -O1)
+target_link_options(server_asan PRIVATE -fsanitize=address,undefined)
+target_link_libraries(server_asan ${CMAKE_DL_LIBS})
