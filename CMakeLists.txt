@@ -9,10 +9,12 @@ include_directories(include)
 
 add_executable(server
     src/main.cpp
+    src/Connection.cpp
     src/HttpParser.cpp
     src/Router.cpp
     src/FileManager.cpp
     src/Logger.cpp
     src/TaskQueue.cpp
+    src/ResponseQueue.cpp
     src/ThreadPool.cpp
 )
