@@ -93,6 +93,12 @@ echo "10.3 Running Phase 6.2 Client-Side Prediction & Reconciliation Tests"
 echo "=================================================="
 python3 tests/test_phase6_2_prediction.py
 
+echo ""
+echo "=================================================="
+echo "10.4 Running Phase 7 Server Observability & Metrics Tests"
+echo "=================================================="
+python3 tests/test_phase7_metrics.py
+
 
 
 echo ""
