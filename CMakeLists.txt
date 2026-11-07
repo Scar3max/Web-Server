@@ -19,6 +19,10 @@ add_executable(server
     src/ThreadPool.cpp
     src/WebSocketHandshake.cpp
     src/WebSocketFrame.cpp
+    src/Json.cpp
+    src/Physics.cpp
+    src/SnapshotQueue.cpp
+    src/SimulationThread.cpp
 )
 
 target_link_libraries(server ${CMAKE_DL_LIBS})
