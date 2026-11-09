@@ -279,7 +279,7 @@ Refer to [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for complete wire frame layouts 
 
 ### Snapshot Negotiation & Wire Formats
 - **Binary Snapshots (Schema v1)**:
-  - 32-byte fixed header + 41 bytes per player.
+  - 36-byte fixed header + 36 bytes per player (+ 11+N bytes per race result).
   - Big-endian byte order for cross-platform IEEE 754 fidelity.
   - Zero dynamic heap allocation per recipient during broadcast.
 - **Format Negotiation**:

@@ -66,40 +66,52 @@ The server supports two snapshot formats:
 
 Binary snapshots are transmitted as unfragmented **WebSocket Binary Frames** (`opcode = 0x02`). All multi-byte integer and floating-point values are encoded in **Network Byte Order (Big-Endian)**.
 
-### 2.1 Header Layout (32 Bytes Fixed)
+### 2.1 Header Layout (36 Bytes Fixed)
+
+The frame starts with a fixed 36-byte header:
 
 | Byte Offset | Field Name | Data Type | Endianness | Description |
 |:---:|:---|:---:|:---:|:---|
-| `0` | `magic` | `uint8` | — | Magic byte marker: ASCII `'R'` (`0x52`) |
-| `1` | `version` | `uint8` | — | Schema version: `0x01` |
-| `2` | `flags` | `uint8` | — | Bit flags: Bit 0 = Countdown Active, Bit 1 = Race Finished |
-| `3` | `roomState` | `uint8` | — | Room State: `0`=WAITING, `1`=COUNTDOWN, `2`=RACING, `3`=FINISHED |
-| `4–7` | `tick` | `uint32` | Big-Endian | Monotonically increasing simulation tick counter |
-| `8–15` | `timestamp` | `float64` | Big-Endian | Monotonic simulation time in seconds (IEEE 754 double) |
-| `16–19` | `roomId` | `uint32` | Big-Endian | Room ID (`0` for Practice Mode, `>0` for Multi-Room) |
-| `20–23` | `countdownRemaining` | `float32` | Big-Endian | Authoritative countdown seconds remaining (IEEE 754 float) |
-| `24–25` | `playerCount` | `uint16` | Big-Endian | Number of player vehicle records following header |
-| `26–31` | `reserved` | `uint8[6]` | — | Reserved for future expansion (zeroed) |
+| `0–3` | `magic` | `uint32` | Big-Endian | Magic number: `0x534E4150` (ASCII `"SNAP"`) |
+| `4` | `version` | `uint8` | — | Protocol schema version: `1` |
+| `5` | `roomState` | `uint8` | — | Room State: `0`=WAITING, `1`=COUNTDOWN, `2`=RACING, `3`=FINISHED |
+| `6–7` | `countdown` | `uint16` | Big-Endian | Countdown in tenths of a second (e.g. `50` = 5.0s, `0` = inactive) |
+| `8–11` | `roomId` | `uint32` | Big-Endian | Room ID (`0` for Practice Mode, `>0` for Multi-Room) |
+| `12–19` | `roomCode` | `char[8]` | ASCII | Fixed 8-byte ASCII room code (null-padded / null-terminated) |
+| `20–23` | `tick` | `uint32` | Big-Endian | Low 32 bits of monotonic 60 Hz simulation tick counter |
+| `24–31` | `timestamp` | `uint64` | Big-Endian | Server epoch timestamp in milliseconds |
+| `32–33` | `playerCount` | `uint16` | Big-Endian | Number of player vehicle records following header |
+| `34–35` | `resultCount` | `uint16` | Big-Endian | Number of finish leaderboard records following players |
 
-### 2.2 Per-Player Record Layout (41 Bytes Fixed + Variable Name)
+### 2.2 Per-Player Record Layout (36 Bytes Fixed Per Player)
 
-For each player in `playerCount` (indices `0` through `playerCount - 1`):
+Following the 36-byte header, exactly `playerCount` records of 36 bytes each are packed consecutively:
 
-| Offset | Field Name | Data Type | Endianness | Description |
+| Byte Offset | Field Name | Data Type | Endianness | Description |
 |:---:|:---|:---:|:---:|:---|
-| `+0–3` | `playerId` | `uint32` | Big-Endian | Unique server-assigned player ID |
-| `+4–7` | `ackSeq` | `uint32` | Big-Endian | Highest processed client input sequence number |
-| `+8–15` | `distance` | `float64` | Big-Endian | Longitudinal track distance in meters along spline |
-| `+16–19` | `lateralX` | `float32` | Big-Endian | Lateral offset `x` across track width in `[-1.0, 1.0]` |
-| `+20–23` | `speed` | `float32` | Big-Endian | Current vehicle forward velocity in m/s |
-| `+24–27` | `worldX` | `float32` | Big-Endian | Pre-calculated 2D world space X coordinate |
-| `+28–31` | `worldY` | `float32` | Big-Endian | Pre-calculated 2D world space Y coordinate |
-| `+32–35` | `heading` | `float32` | Big-Endian | World space vehicle heading in radians |
-| `+36–37` | `rank` | `uint16` | Big-Endian | Current race leaderboard standing (`1` = 1st place) |
-| `+38` | `finished` | `uint8` | — | Finished flag (`1` if crossed finish line, `0` otherwise) |
-| `+39` | `lane` | `uint8` | — | Starting grid lane index (`0..7`) |
-| `+40` | `nameLength` | `uint8` | — | Byte length `N` of player name (clamped to max `32`) |
-| `+41–(40+N)` | `nameBytes` | `char[N]` | UTF-8 | UTF-8 encoded player name string (`N` bytes) |
+| `+0–3` | `id` | `uint32` | Big-Endian | Authoritative Server Player ID |
+| `+4–7` | `x` | `float32` | Big-Endian | Normalized lateral road position in `[-1.0, 1.0]` (IEEE 754) |
+| `+8–11` | `distance` | `float32` | Big-Endian | Longitudinal spline progress in meters (IEEE 754) |
+| `+12–15` | `speed` | `float32` | Big-Endian | Vehicle forward speed in km/h (IEEE 754) |
+| `+16–19` | `steer` | `float32` | Big-Endian | Steering angle in radians (IEEE 754) |
+| `+20–23` | `worldX` | `float32` | Big-Endian | Pre-calculated 2D Cartesian world X coordinate (IEEE 754) |
+| `+24–27` | `worldY` | `float32` | Big-Endian | Pre-calculated 2D Cartesian world Y coordinate (IEEE 754) |
+| `+28–31` | `heading` | `float32` | Big-Endian | Vehicle orientation heading angle in radians (IEEE 754) |
+| `+32–35` | `ackSeq` | `uint32` | Big-Endian | Highest client input sequence number processed by server |
+
+Total size for `N` players = `36 + (N * 36)` bytes.
+
+### 2.3 Per-Result Record Layout (11 Bytes Fixed Header + Variable Name)
+
+When a race is completed (`resultCount > 0`), finish records are appended after all player records:
+
+| Byte Offset | Field Name | Data Type | Endianness | Description |
+|:---:|:---|:---:|:---:|:---|
+| `+0–3` | `playerId` | `uint32` | Big-Endian | Finished player ID |
+| `+4–5` | `rank` | `uint16` | Big-Endian | Final finishing rank (`1` = 1st place) |
+| `+6–9` | `finishTime` | `float32` | Big-Endian | Official finishing time in seconds (IEEE 754) |
+| `+10` | `nameLen` | `uint8` | — | Byte length `M` of player display name (`0..255`) |
+| `+11–(10+M)` | `name` | `char[M]` | UTF-8 | UTF-8 encoded player display name string (`M` bytes) |
 
 ---
 
