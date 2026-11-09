@@ -2,6 +2,8 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include <cstdlib>
+#include <climits>
 #include <sys/stat.h>
 
 using namespace std;
@@ -70,6 +72,13 @@ bool FileManager::resolveSafePath(const string& baseDir, const string& requestPa
         return false;
     }
 
+    // Reject URL-encoded traversals (%2e%2e, %2f)
+    string lowerReq = requestPath;
+    transform(lowerReq.begin(), lowerReq.end(), lowerReq.begin(), [](unsigned char c) { return tolower(c); });
+    if (lowerReq.find("%2e") != string::npos || lowerReq.find("%2f") != string::npos) {
+        return false;
+    }
+
     // Strip query string and fragment
     string clean = requestPath;
     size_t q = clean.find_first_of("?#");
@@ -90,16 +99,29 @@ bool FileManager::resolveSafePath(const string& baseDir, const string& requestPa
         clean = "index.html";
     }
 
+    auto checkCandidate = [](const string& base, const string& candidate, string& out) -> bool {
+        if (!fileExistsAndIsRegular(candidate)) return false;
+        char realBase[PATH_MAX];
+        char realTarget[PATH_MAX];
+        if (realpath(base.c_str(), realBase) != nullptr && realpath(candidate.c_str(), realTarget) != nullptr) {
+            string baseStr(realBase);
+            string targetStr(realTarget);
+            if (targetStr.rfind(baseStr + "/", 0) == 0 || targetStr == baseStr) {
+                out = candidate;
+                return true;
+            }
+        }
+        return false;
+    };
+
     // Check candidate paths: current working directory or parent directory (e.g. running from build/)
     string candidate1 = baseDir + "/" + clean;
-    if (fileExistsAndIsRegular(candidate1)) {
-        resolvedPath = candidate1;
+    if (checkCandidate(baseDir, candidate1, resolvedPath)) {
         return true;
     }
 
     string candidate2 = "../" + baseDir + "/" + clean;
-    if (fileExistsAndIsRegular(candidate2)) {
-        resolvedPath = candidate2;
+    if (checkCandidate("../" + baseDir, candidate2, resolvedPath)) {
         return true;
     }
 

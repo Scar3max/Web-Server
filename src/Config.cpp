@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <limits.h>
+#include <arpa/inet.h>
 #include <vector>
 
 using namespace std;
@@ -50,7 +51,15 @@ int ServerConfig::parse(int argc, char* argv[], ServerConfig& outConfig, string&
     // 1. Load from environment variables first
     const char* envHost = getenv("HTTP_HOST");
     if (envHost && *envHost) {
-        cfg.host = envHost;
+        string h(envHost);
+        if (h != "0.0.0.0" && h != "127.0.0.1") {
+            struct in_addr addr{};
+            if (inet_pton(AF_INET, h.c_str(), &addr) <= 0) {
+                errMessage = "Invalid HTTP_HOST environment variable: '" + h + "' (must be a valid IPv4 address)";
+                return -1;
+            }
+        }
+        cfg.host = h;
     }
 
     const char* envPort = getenv("HTTP_PORT");
@@ -115,11 +124,19 @@ int ServerConfig::parse(int argc, char* argv[], ServerConfig& outConfig, string&
                 errMessage = "Missing argument for " + arg;
                 return -1;
             }
-            cfg.host = argv[++i];
-            if (cfg.host.empty()) {
+            string h = argv[++i];
+            if (h.empty()) {
                 errMessage = "Host address cannot be empty";
                 return -1;
             }
+            if (h != "0.0.0.0" && h != "127.0.0.1") {
+                struct in_addr addr{};
+                if (inet_pton(AF_INET, h.c_str(), &addr) <= 0) {
+                    errMessage = "Invalid host address: '" + h + "' (must be a valid IPv4 address)";
+                    return -1;
+                }
+            }
+            cfg.host = h;
         } else if (arg == "-p" || arg == "--port") {
             if (i + 1 >= argc) {
                 errMessage = "Missing argument for " + arg;
