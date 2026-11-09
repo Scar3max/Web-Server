@@ -4,17 +4,21 @@ set -e
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
+SERVER_PID=""
+cleanup() {
+    if [ -n "$SERVER_PID" ]; then
+        echo "Stopping background server (PID $SERVER_PID)..."
+        kill -SIGINT "$SERVER_PID" 2>/dev/null || true
+        wait "$SERVER_PID" 2>/dev/null || true
+        SERVER_PID=""
+    fi
+}
+trap cleanup EXIT INT TERM
+
 echo "Starting server..."
 ./build/server &
 SERVER_PID=$!
 sleep 1
-
-cleanup() {
-    echo "Stopping server (PID $SERVER_PID)..."
-    kill -SIGINT $SERVER_PID 2>/dev/null || true
-    wait $SERVER_PID 2>/dev/null || true
-}
-trap cleanup EXIT
 
 echo "=================================================="
 echo "1. Running Phase 1 HTTP Functional Test Suite"
@@ -77,37 +81,37 @@ python3 tests/test_phase6_track_collisions.py
 
 echo ""
 echo "=================================================="
-echo "10.1 Running Phase 6.1 Collision Stability & Penetration Tests"
+echo "11. Running Phase 6.1 Collision Stability & Penetration Tests"
 echo "=================================================="
 ./build/test_collision_stability
 
 echo ""
 echo "=================================================="
-echo "10.2 Running Phase 6.1 Server-Browser Track Geometry Parity Tests"
+echo "12. Running Phase 6.1 Server-Browser Track Geometry Parity Tests"
 echo "=================================================="
 python3 tests/test_track_parity.py
 
 echo ""
 echo "=================================================="
-echo "10.3 Running Phase 6.2 Client-Side Prediction & Reconciliation Tests"
+echo "13. Running Phase 6.2 Client-Side Prediction & Reconciliation Tests"
 echo "=================================================="
 python3 tests/test_phase6_2_prediction.py
 
 echo ""
 echo "=================================================="
-echo "10.4 Running Phase 7 Server Observability & Metrics Tests"
+echo "14. Running Phase 7 Server Observability & Metrics Tests"
 echo "=================================================="
 python3 tests/test_phase7_metrics.py
 
 echo ""
 echo "=================================================="
-echo "10.5 Running Phase 7.1 WebSocket Fan-Out & Bandwidth Optimization Tests"
+echo "15. Running Phase 7.1 WebSocket Fan-Out & Bandwidth Optimization Tests"
 echo "=================================================="
 python3 tests/test_phase7_1_optimization.py
 
 echo ""
 echo "=================================================="
-echo "10.6 Running Phase 8 Production Readiness & Configuration Tests"
+echo "16. Running Phase 8 Production Readiness & Configuration Tests"
 echo "=================================================="
 python3 tests/test_phase8_production.py
 
@@ -115,25 +119,25 @@ python3 tests/test_phase8_production.py
 
 echo ""
 echo "=================================================="
-echo "11. Running ApacheBench Concurrency Regression Test"
+echo "17. Running ApacheBench Concurrency Regression Test"
 echo "=================================================="
 ab -n 5000 -c 50 http://127.0.0.1:8080/
 
 echo ""
-echo "Stopping background server for shutdown tests..."
+echo "Stopping background server for standalone shutdown tests..."
 kill -SIGINT $SERVER_PID 2>/dev/null || true
 wait $SERVER_PID 2>/dev/null || true
-trap - EXIT
+SERVER_PID=""
 
 echo ""
 echo "=================================================="
-echo "12. Running Server Shutdown Under Active Load Test"
+echo "18. Running Server Shutdown Under Active Load Test"
 echo "=================================================="
 python3 tests/test_shutdown_under_load.py
 
 echo ""
 echo "=================================================="
-echo "13. Running Full Server ThreadSanitizer Verification"
+echo "19. Running Full Server ThreadSanitizer Verification (Race Detection)"
 echo "=================================================="
 python3 -c "
 import sys; sys.path.insert(0, 'tests')
@@ -143,7 +147,7 @@ test_shutdown_under_load.test_shutdown_under_load('./build/server_tsan', use_set
 
 echo ""
 echo "=================================================="
-echo "14. Running Full Server AddressSanitizer & LeakSanitizer Verification"
+echo "20. Running Full Server AddressSanitizer & LeakSanitizer Verification (Memory Safety)"
 echo "=================================================="
 python3 -c "
 import sys; sys.path.insert(0, 'tests')
@@ -152,4 +156,4 @@ test_shutdown_under_load.test_shutdown_under_load('./build/server_asan', use_set
 "
 
 echo ""
-echo "All test suites and benchmarks completed successfully!"
+echo "All 20 test stages and benchmarks completed successfully!"

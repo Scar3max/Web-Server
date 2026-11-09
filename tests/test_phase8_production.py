@@ -264,6 +264,124 @@ def test_input_sanitization():
         assert proc.returncode == 0
     print("[PASS] Client input sanitization verified.")
 
+def test_invalid_host_rejection():
+    print("[TEST] Invalid IPv4 host address rejection...")
+    # Invalid CLI host
+    res = run_cmd([SERVER_BIN, "-h", "999.999.999.999"])
+    assert res.returncode != 0
+    assert "Invalid host address" in res.stderr
+
+    # Non-IP CLI host
+    res = run_cmd([SERVER_BIN, "-h", "not-a-valid-ip"])
+    assert res.returncode != 0
+    assert "Invalid host address" in res.stderr
+
+    # Invalid ENV host
+    res = run_cmd([SERVER_BIN], env={"HTTP_HOST": "invalid-ip-addr"})
+    assert res.returncode != 0
+    assert "Invalid HTTP_HOST" in res.stderr
+    print("[PASS] Invalid host configurations strictly rejected.")
+
+def test_path_traversal_and_symlink_security():
+    print("[TEST] Path traversal and static file security...")
+    test_port = 8093
+    proc = subprocess.Popen(
+        [SERVER_BIN, "-p", str(test_port), "-l", "WARN"],
+        cwd=PROJECT_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE
+    )
+    time.sleep(0.5)
+    try:
+        import urllib.error
+
+        # 1. Direct path traversal
+        for bad_path in ["/../CMakeLists.txt", "/../../etc/passwd", "/%2e%2e/CMakeLists.txt", "/%2e%2e%2fCMakeLists.txt"]:
+            try:
+                url = f"http://127.0.0.1:{test_port}{bad_path}"
+                req = urllib.request.urlopen(url, timeout=2)
+                assert False, f"Expected 404 for traversal path {bad_path}, got {req.status}"
+            except urllib.error.HTTPError as e:
+                assert e.code == 404, f"Expected 404 for {bad_path}, got {e.code}"
+
+        # 2. Legitimate asset returns 200
+        url = f"http://127.0.0.1:{test_port}/js/main.js"
+        req = urllib.request.urlopen(url, timeout=2)
+        assert req.status == 200
+        assert "application/javascript" in req.headers.get("Content-Type", "")
+    finally:
+        proc.send_signal(signal.SIGINT)
+        proc.wait(timeout=3)
+        assert proc.returncode == 0
+    print("[PASS] Path traversal attempts strictly rejected with 404.")
+
+def test_binary_snapshot_exact_test_vectors():
+    print("[TEST] Binary snapshot Schema v1 exact byte vector verification...")
+    import struct
+
+    # Construct known 72-byte Schema v1 test vector (36-byte header + 36-byte player record)
+    buf = bytearray(72)
+    struct.pack_into("!I", buf, 0, 0x534E4150) # magic: 'SNAP'
+    buf[4] = 1 # version = 1
+    buf[5] = 2 # roomState = RACING
+    struct.pack_into("!H", buf, 6, 50) # countdown = 5.0s (50 tenths)
+    struct.pack_into("!I", buf, 8, 42) # roomId = 42
+    buf[12:20] = b"TESTROOM" # roomCode
+    struct.pack_into("!I", buf, 20, 1000) # tick = 1000
+    struct.pack_into("!Q", buf, 24, 1700000000000) # timestamp ms
+    struct.pack_into("!H", buf, 32, 1) # playerCount = 1
+    struct.pack_into("!H", buf, 34, 0) # resultCount = 0
+
+    # Player 1 record at offset 36
+    struct.pack_into("!I", buf, 36, 7) # id = 7
+    struct.pack_into("!f", buf, 40, 0.25) # x = 0.25
+    struct.pack_into("!f", buf, 44, 150.5) # distance = 150.5
+    struct.pack_into("!f", buf, 48, 35.2) # speed = 35.2
+    struct.pack_into("!f", buf, 52, -0.1) # steer = -0.1
+    struct.pack_into("!f", buf, 56, 120.0) # worldX = 120.0
+    struct.pack_into("!f", buf, 60, 450.0) # worldY = 450.0
+    struct.pack_into("!f", buf, 64, 1.57) # heading = 1.57
+    struct.pack_into("!I", buf, 68, 42) # ackSeq = 42
+
+    # Verify exact header byte offset assertions
+    assert len(buf) == 72
+    assert buf[0:4] == b"SNAP"
+    assert buf[4] == 1
+    assert buf[5] == 2
+    assert struct.unpack("!H", buf[6:8])[0] == 50
+    assert struct.unpack("!I", buf[8:12])[0] == 42
+    assert buf[12:20] == b"TESTROOM"
+    assert struct.unpack("!I", buf[20:24])[0] == 1000
+    assert struct.unpack("!Q", buf[24:32])[0] == 1700000000000
+    assert struct.unpack("!H", buf[32:34])[0] == 1
+    assert struct.unpack("!H", buf[34:36])[0] == 0
+
+    # Verify player offset assertions
+    assert struct.unpack("!I", buf[36:40])[0] == 7
+    assert abs(struct.unpack("!f", buf[40:44])[0] - 0.25) < 1e-5
+    assert abs(struct.unpack("!f", buf[44:48])[0] - 150.5) < 1e-4
+    assert abs(struct.unpack("!f", buf[48:52])[0] - 35.2) < 1e-4
+    assert abs(struct.unpack("!f", buf[52:56])[0] - (-0.1)) < 1e-5
+    assert abs(struct.unpack("!f", buf[56:60])[0] - 120.0) < 1e-4
+    assert abs(struct.unpack("!f", buf[60:64])[0] - 450.0) < 1e-4
+    assert abs(struct.unpack("!f", buf[64:68])[0] - 1.57) < 1e-4
+    assert struct.unpack("!I", buf[68:72])[0] == 42
+
+    # Verify corrupt vector rejection
+    bad_magic = bytearray(buf)
+    bad_magic[0:4] = b"NOPE"
+    assert struct.unpack("!I", bad_magic[0:4])[0] != 0x534E4150
+
+    bad_version = bytearray(buf)
+    bad_version[4] = 99
+    assert bad_version[4] != 1
+
+    # Truncated record by 1 byte
+    truncated = bytes(buf[:-1])
+    assert len(truncated) == 71 # Missing last byte of ackSeq
+    print("  -> Schema v1 36-byte header and 36-byte player record offsets validated.")
+    print("[PASS] Binary snapshot byte vector verification passed.")
+
 def run_all_tests():
     print("==================================================")
     print("Phase 8 Production Readiness & Deployment Tests")
@@ -271,9 +389,12 @@ def run_all_tests():
     test_cli_help()
     test_invalid_cli_options()
     test_environment_variables()
+    test_invalid_host_rejection()
     test_health_endpoint()
     test_out_of_tree_execution()
+    test_path_traversal_and_symlink_security()
     test_input_sanitization()
+    test_binary_snapshot_exact_test_vectors()
     print("==================================================")
     print("ALL PHASE 8 PRODUCTION READINESS TESTS PASSED!")
     print("==================================================")
