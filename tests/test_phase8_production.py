@@ -319,20 +319,21 @@ def test_binary_snapshot_exact_test_vectors():
     print("[TEST] Binary snapshot Schema v1 exact byte vector verification...")
     import struct
 
-    # Construct known 72-byte Schema v1 test vector (36-byte header + 36-byte player record)
-    buf = bytearray(72)
+    # Construct known 86-byte Schema v1 test vector:
+    # 36-byte header + 36-byte player record + 14-byte result record (11 fixed + 3 name)
+    buf = bytearray(86)
     struct.pack_into("!I", buf, 0, 0x534E4150) # magic: 'SNAP'
     buf[4] = 1 # version = 1
-    buf[5] = 2 # roomState = RACING
-    struct.pack_into("!H", buf, 6, 50) # countdown = 5.0s (50 tenths)
+    buf[5] = 3 # roomState = FINISHED
+    struct.pack_into("!H", buf, 6, 0) # countdown = 0.0s (0 tenths)
     struct.pack_into("!I", buf, 8, 42) # roomId = 42
     buf[12:20] = b"TESTROOM" # roomCode
     struct.pack_into("!I", buf, 20, 1000) # tick = 1000
     struct.pack_into("!Q", buf, 24, 1700000000000) # timestamp ms
     struct.pack_into("!H", buf, 32, 1) # playerCount = 1
-    struct.pack_into("!H", buf, 34, 0) # resultCount = 0
+    struct.pack_into("!H", buf, 34, 1) # resultCount = 1
 
-    # Player 1 record at offset 36
+    # Player 1 record at offset 36 (36 bytes)
     struct.pack_into("!I", buf, 36, 7) # id = 7
     struct.pack_into("!f", buf, 40, 0.25) # x = 0.25
     struct.pack_into("!f", buf, 44, 150.5) # distance = 150.5
@@ -343,20 +344,27 @@ def test_binary_snapshot_exact_test_vectors():
     struct.pack_into("!f", buf, 64, 1.57) # heading = 1.57
     struct.pack_into("!I", buf, 68, 42) # ackSeq = 42
 
+    # Result 1 record at offset 72 (11-byte fixed header + 3-byte name)
+    struct.pack_into("!I", buf, 72, 7) # playerId = 7 (uint32)
+    struct.pack_into("!H", buf, 76, 1) # rank = 1 (uint16)
+    struct.pack_into("!f", buf, 78, 45.67) # finishTime = 45.67 (float32)
+    buf[82] = 3 # nameLen = 3 (uint8)
+    buf[83:86] = b"Ace" # name = "Ace"
+
     # Verify exact header byte offset assertions
-    assert len(buf) == 72
+    assert len(buf) == 86
     assert buf[0:4] == b"SNAP"
     assert buf[4] == 1
-    assert buf[5] == 2
-    assert struct.unpack("!H", buf[6:8])[0] == 50
+    assert buf[5] == 3
+    assert struct.unpack("!H", buf[6:8])[0] == 0
     assert struct.unpack("!I", buf[8:12])[0] == 42
     assert buf[12:20] == b"TESTROOM"
     assert struct.unpack("!I", buf[20:24])[0] == 1000
     assert struct.unpack("!Q", buf[24:32])[0] == 1700000000000
     assert struct.unpack("!H", buf[32:34])[0] == 1
-    assert struct.unpack("!H", buf[34:36])[0] == 0
+    assert struct.unpack("!H", buf[34:36])[0] == 1
 
-    # Verify player offset assertions
+    # Verify player offset assertions (offset 36..71)
     assert struct.unpack("!I", buf[36:40])[0] == 7
     assert abs(struct.unpack("!f", buf[40:44])[0] - 0.25) < 1e-5
     assert abs(struct.unpack("!f", buf[44:48])[0] - 150.5) < 1e-4
@@ -366,6 +374,21 @@ def test_binary_snapshot_exact_test_vectors():
     assert abs(struct.unpack("!f", buf[60:64])[0] - 450.0) < 1e-4
     assert abs(struct.unpack("!f", buf[64:68])[0] - 1.57) < 1e-4
     assert struct.unpack("!I", buf[68:72])[0] == 42
+
+    # Verify result record offset assertions (offset 72..85)
+    assert struct.unpack("!I", buf[72:76])[0] == 7 # playerId: uint32 (4 bytes, offset +0..3)
+    assert struct.unpack("!H", buf[76:78])[0] == 1 # rank: uint16 (2 bytes, offset +4..5)
+    assert abs(struct.unpack("!f", buf[78:82])[0] - 45.67) < 1e-4 # finishTime: float32 (4 bytes, offset +6..9)
+    assert buf[82] == 3 # nameLen: uint8 (1 byte, offset +10)
+    assert buf[83:86] == b"Ace" # name: char[3] (3 bytes, offset +11..13)
+
+    # Verify composite unpacking with !IHfB matches protocol specification exactly
+    res_pid, res_rank, res_time, res_namelen = struct.unpack("!IHfB", buf[72:83])
+    assert res_pid == 7
+    assert res_rank == 1
+    assert abs(res_time - 45.67) < 1e-4
+    assert res_namelen == 3
+    assert buf[83:83+res_namelen].decode('utf-8') == "Ace"
 
     # Verify corrupt vector rejection
     bad_magic = bytearray(buf)
@@ -378,8 +401,8 @@ def test_binary_snapshot_exact_test_vectors():
 
     # Truncated record by 1 byte
     truncated = bytes(buf[:-1])
-    assert len(truncated) == 71 # Missing last byte of ackSeq
-    print("  -> Schema v1 36-byte header and 36-byte player record offsets validated.")
+    assert len(truncated) == 85 # Missing last byte of name
+    print("  -> Schema v1 36-byte header, 36-byte player, and 11+N byte result record validated.")
     print("[PASS] Binary snapshot byte vector verification passed.")
 
 def run_all_tests():
