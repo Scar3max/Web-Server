@@ -94,10 +94,9 @@ http_server/
 │   │   └── track.js          # Browser track spline parity
 │   ├── index.html            # Racing UI & HUD
 │   └── style.css             # HUD styling
-├── tests/                    # Automated regression & sanitizer test suites
 ├── nginx/                    # Production reverse proxy configuration
 ├── Dockerfile                # Multi-stage container definition
-└── CMakeLists.txt            # CMake configuration with TSAN & ASAN targets
+└── CMakeLists.txt            # CMake build system definition
 ```
 
 ---
@@ -165,37 +164,23 @@ taskQueue.push([fd, connId, &responseQueue]() {
 
 ---
 
-## 4. Verification, Testing & Sanitizers
+## 4. Building & Contribution Checklist
 
-### 4.1 Running the Regression Suite
-
-The project includes an extensive 14-stage automated regression suite:
-```bash
-./tests/run_tests.sh
-```
-
-### 4.2 Building with Sanitizers
-
-Verify concurrency and memory safety whenever altering shared data structures or queues:
+### 4.1 Building the Server
 
 ```bash
-# Clean build
-cmake -B build
-cmake --build build -j4
+# Configure and build optimized production binary
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
 
-# ThreadSanitizer (race conditions, mutex deadlocks)
-./build/server_tsan -p 8081
-
-# AddressSanitizer & LeakSanitizer (use-after-free, memory leaks, buffer overruns)
-./build/server_asan -p 8082
+# Run server
+./build/server
 ```
 
-### 4.3 Pull Request Checklist
+### 4.2 Pull Request Checklist
 
 Before submitting modifications:
-- [ ] No direct socket writes outside `main.cpp`.
+- [ ] No direct socket writes outside `main.cpp` (strict event loop ownership).
 - [ ] All inputs validated and bounded (no unbounded memory growth).
-- [ ] `./tests/run_tests.sh` executes with 100% pass rate.
-- [ ] `server_tsan` passes shutdown under active load test cleanly.
-- [ ] `server_asan` reports zero memory leaks.
 - [ ] Binary snapshot schema compatibility maintained in `docs/PROTOCOL.md`.
+- [ ] Static asset changes verified across browser clients.

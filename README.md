@@ -329,49 +329,16 @@ Refer to [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for complete wire frame layouts 
 
 ---
 
-## 12. Testing & Verification Suite
-
-The repository contains an automated regression suite covering HTTP, WebSockets, Concurrency, Physics, Collisions, Metrics, and Sanitizers.
-
-```bash
-# Run complete automated verification suite (14 stages)
-./tests/run_tests.sh
-```
-
-### Test Suite Coverage
-| Suite | Script | Scope |
-|---|---|---|
-| **Phase 1** | `test_phase1.py` | HTTP parsing, partial writes, abrupt disconnects, 413 limits |
-| **Phase 2** | `test_phase2_ws.py` | RFC 6455 framing, fragmentation, UTF-8 checks, ping/pong |
-| **Phase 2.1** | `test_phase2_audit.py` | Handshake security, 64-bit frame validation, close codes |
-| **Phase 3** | `test_phase3_client.py` | Static assets, MIME types, directory traversal defense |
-| **Phase 4** | `test_phase4_sim.py` | 60 Hz simulation, vehicle physics, player lifecycle |
-| **Phase 4.1** | `test_phase4_audit.py` | Simulation concurrency, input queue coalescing, backpressure |
-| **Phase 4.2** | `test_phase4_stress.py` | Queue memory bounds, flood resistance, 40-client churn |
-| **Phase 5** | `test_phase5_rooms.py` | Room creation, join/leave, host transfers, 5s countdowns |
-| **Phase 5.1** | `test_phase5_audit.py` | Multi-room isolation, concurrent races, capacity limits |
-| **Phase 6** | `test_phase6_track_collisions.py` | Curved track geometry, vehicle collisions, de-penetration |
-| **Phase 6.1** | `test_collision_stability` | High-speed multi-body collision penetration solver |
-| **Phase 6.2** | `test_phase6_2_prediction.py` | Client prediction, reconciliation, error smoothing |
-| **Phase 7** | `test_phase7_metrics.py` | Prometheus scrape endpoints, atomic counters, timing |
-| **Phase 7.1** | `test_phase7_1_optimization.py` | Binary snapshot wire format, format negotiation, fan-out |
-| **Phase 8** | `test_phase8_production.py` | CLI flags, env vars, /health check, out-of-tree run |
-| **Benchmark** | `ApacheBench (ab)` | 5,000 requests @ 50 concurrency baseline |
-| **Sanitizers** | `server_tsan` / `server_asan` | ThreadSanitizer & AddressSanitizer under active load |
-
----
-
-## 13. Project Structure & License
+## 12. Project Structure & License
 
 ```
-├── include/              # Public header definitions
-├── src/                  # Component implementations
-├── static/               # Browser HTML5/Canvas client
+├── include/              # Public C++20 header definitions
+├── src/                  # Server implementation files
+├── static/               # Browser HTML5 Canvas racing client
 ├── docs/
-│   ├── PROTOCOL.md       # Complete Schema v1 protocol specification
-│   └── DEVELOPMENT.md    # Architecture and contribution guidelines
-├── tests/                # Automated regression test scripts
-├── nginx/                # Production reverse proxy config
+│   ├── PROTOCOL.md       # Complete Schema v1 wire protocol specification
+│   └── DEVELOPMENT.md    # Architecture and threading guidelines
+├── nginx/                # Production reverse proxy configuration
 ├── Dockerfile            # Multi-stage production container
 └── CMakeLists.txt        # Build system definition
 ```
